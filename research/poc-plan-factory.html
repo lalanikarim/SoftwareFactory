@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Software Factory PoC Plan — Pi Durable</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #5b9dff;
+    --accent-2: #7ee0c3;
+    --warn: #ffb454;
+    --danger: #ff7a7a;
+    --code-bg: #12151b;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.65; font-size: 16px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+
+  header.hero {
+    background: linear-gradient(135deg, #10131a 0%, #141b2d 60%, #101a22 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 56px 0 44px;
+  }
+  .hero h1 { font-size: 2.1rem; margin: 0 0 10px; letter-spacing: -0.02em; }
+  .hero p.sub { color: var(--muted); font-size: 1.05rem; margin: 0 0 18px; max-width: 760px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--muted); font-size: 0.8rem; padding: 4px 12px; border-radius: 999px;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  nav.toc {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  nav.toc .wrap { display: flex; gap: 4px; overflow-x: auto; padding-top: 10px; padding-bottom: 10px; }
+  nav.toc a {
+    color: var(--muted); text-decoration: none; font-size: 0.85rem;
+    padding: 6px 12px; border-radius: 8px; white-space: nowrap;
+  }
+  nav.toc a:hover { color: var(--text); background: var(--surface-2); }
+
+  section { padding: 44px 0 8px; }
+  h2 {
+    font-size: 1.5rem; margin: 0 0 6px; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .num {
+    background: var(--accent); color: #0b1220; font-size: 0.85rem; font-weight: 700;
+    width: 28px; height: 28px; border-radius: 8px; display: inline-flex;
+    align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  h3 { font-size: 1.1rem; margin: 26px 0 10px; color: var(--accent-2); }
+  p { margin: 10px 0; }
+  .lede { color: var(--muted); font-size: 1rem; margin-bottom: 18px; }
+
+  ul, ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  strong { color: #fff; }
+  code {
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 5px; font-size: 0.88em;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin: 16px 0;
+  }
+  .card h4 { margin: 0 0 8px; font-size: 1rem; }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  tr:last-child td { border-bottom: none; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  .table-scroll table { margin: 0; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout b.label { display: block; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 4px; }
+  .callout.warn b.label { color: var(--warn); }
+  .callout.danger b.label { color: var(--danger); }
+
+  /* Phase cards */
+  .phase {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin: 18px 0;
+  }
+  .phase .p-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .phase .p-num {
+    background: var(--accent); color: #0b1220; font-weight: 700; font-size: 0.9rem;
+    width: 32px; height: 32px; border-radius: 9px; display: inline-flex;
+    align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .phase h3 { margin: 0; font-size: 1.15rem; color: var(--text); }
+  .phase .p-tag { font-size: 0.78rem; color: var(--warn); font-weight: 600; }
+  .gate {
+    margin-top: 14px; padding: 10px 14px; border-radius: 8px;
+    background: rgba(126, 224, 195, 0.07); border: 1px solid rgba(126, 224, 195, 0.3);
+    font-size: 0.92rem;
+  }
+  .gate b { color: var(--accent-2); }
+  .gate.stop { background: rgba(255, 122, 122, 0.07); border-color: rgba(255, 122, 122, 0.35); }
+  .gate.stop b { color: var(--danger); }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  footer { border-top: 1px solid var(--border); margin-top: 50px; padding: 30px 0 60px; color: var(--muted); font-size: 0.88rem; }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 1.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    nav.toc { position: static; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Software Factory PoC Plan</h1>
+    <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
+    <div class="meta">
+      <span class="chip">Date <b>2026-10-18</b></span>
+      <span class="chip">Status <b>Proposed</b></span>
+      <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
+      <span class="chip">Est. <b>5–7 focused days</b></span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#context">Context</a>
+    <a href="#goal">Goal</a>
+    <a href="#assumptions">Assumptions</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#phases">Phases &amp; Gates</a>
+    <a href="#fallbacks">Fallbacks</a>
+    <a href="#measurement">Measurement</a>
+    <a href="#effort">Effort</a>
+    <a href="#risks">Risks</a>
+    <a href="#conventions">Conventions</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+<!-- 1. CONTEXT -->
+<section id="context">
+  <h2><span class="num">1</span> Context</h2>
+  <p class="lede">Three prior bodies of work make this plan possible — and define exactly what this PoC must (and must not) test.</p>
+
+  <div class="card">
+    <h4>Already proven (do not re-test)</h4>
+    <p style="margin:0">The companion Pi Durable PoC (<code>../PiDurable/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
+  </div>
+
+  <h3>What this PoC exists to test</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Unproven question</th><th>Phase</th></tr></thead>
+      <tbody>
+        <tr><td>Can a local 27B model do <em>real</em> issue→PR work at acceptable acceptance rate (the toy battery was fib.py-scale)?</td><td><strong>2</strong></td></tr>
+        <tr><td>Does an independent reviewer role actually catch bad fixes, or just rubber-stamp?</td><td><strong>3</strong></td></tr>
+        <tr><td>Is the merge approval gate exactly-once with <em>real git side effects</em> under crash?</td><td><strong>4</strong></td></tr>
+        <tr><td>Does the loop close — do review findings change subsequent behavior?</td><td><strong>5</strong></td></tr>
+        <tr><td>Is webhook intake exactly-once under real retry semantics?</td><td><strong>0/1</strong></td></tr>
+        <tr><td>What do end-to-end latency and token cost look like on realistic tasks?</td><td><strong>6</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 2. GOAL -->
+<section id="goal">
+  <h2><span class="num">2</span> Goal &amp; non-goals</h2>
+
+  <div class="callout">
+    <b class="label">Goal</b>
+    Demonstrate a single-repo factory loop end-to-end: a GitHub issue is picked up automatically, a sandboxed worker agent produces a branch + draft PR, an independent reviewer role verifies it with a machine-readable verdict, evidence (diff summary, test output, transcript excerpts) is attached to the PR, and a human approves the merge via Telegram or web — surviving a crash at every stage without duplicate effects.
+  </div>
+
+  <h3>Non-goals (deferred)</h3>
+  <ul>
+    <li>Multi-repo coordination, cross-repo dependency ordering</li>
+    <li>HA / failover, Postgres-backed storage, multi-Pod scaling</li>
+    <li>Running N issues in parallel (throughput is <em>measured</em>, not engineered)</li>
+    <li>Browser automation, email client, MCP bridge</li>
+    <li>Auto-merge — the human checkpoint is a factory requirement, not a PoC limitation</li>
+  </ul>
+</section>
+
+<!-- 3. ASSUMPTIONS -->
+<section id="assumptions">
+  <h2><span class="num">3</span> Assumptions under test</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>ID</th><th>Assumption</th><th>Tested in</th><th>If it fails</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td>Webhook intake with <code>requestId = issue-id</code> is exactly-once under retry</td><td>Phase 0/1</td><td>Fix adapter idempotency before proceeding</td></tr>
+        <tr><td>F2</td><td>Local model produces passing, scoped PRs for bounded real issues at ≥ 2/3 acceptance</td><td>Phase 2</td><td><strong>Major decision point</strong> — see §6</td></tr>
+        <tr><td>F3</td><td>Reviewer catches a seeded bad fix with the correct reason (negative test) and passes good fixes</td><td>Phase 3</td><td>Tighten instructions/checklist; if still unreliable, agent review becomes advisory</td></tr>
+        <tr><td>F4</td><td>Merge approval gate executes the merge exactly once across a mid-approval SIGKILL</td><td>Phase 4</td><td><strong>Stop</strong> — non-negotiable durability failure with real consequences</td></tr>
+        <tr><td>F5</td><td>Review findings feed back into instructions/state so the same mistake doesn't recur</td><td>Phase 5</td><td>Feedback loop stays manual; claim limited to "agent runner", not "factory"</td></tr>
+        <tr><td>F6</td><td>End-to-end cost/latency per issue is acceptable for the target workflow (overnight batch, not interactive)</td><td>Phase 6</td><td>No gate — data informs model-pool and cloud-fallback decisions</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 4. ARCHITECTURE -->
+<section id="architecture">
+  <h2><span class="num">4</span> Architecture</h2>
+
+<pre> GitHub (private fixture repo)
+   │ issue opened / labeled "agent"
+   ▼
+┌─ webhook adapter ────────────────────────────────────────────────┐
+│ POST /tasks { content: &lt;issue, &lt;untrusted&gt;-delimited&gt;,            │
+│               requestId: "issue-&lt;n&gt;" }                            │
+└──────────────┬───────────────────────────────────────────────────┘
+               ▼
+┌─ factory process (one Node process, SQLite storage) ─────────────┐
+│  Orchestrator conversation (root)                                 │
+│   ├─ tools: delegate, github(read), instructions doc             │
+│   ├─ spawns worker subagent ──► sandboxed ExecutionEnv            │
+│   │    cwd=/work/fixture, branch agent/issue-&lt;n&gt;                 │
+│   │    tools: read/write/edit/bash + git                         │
+│   ├─ spawns reviewer subagent ──► own checkout (read-only)       │
+│   │    tools: read/bash(tests only)                              │
+│   │    emits structuredOutput { verdict, evidence, concerns }    │
+│   ├─ evidence packager → PR description + comment                │
+│   └─ merge tool (gh pr merge) behind approval hook               │
+│        └─ pending-approval doc → Telegram inline button / web UI  │
+└───────────────────────────────────────────────────────────────────┘</pre>
+
+  <h3>Reuse vs. build new</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Reuse from <code>../PiDurable/poc</code></th><th>Build new</th></tr></thead>
+      <tbody>
+        <tr><td><code>lib/aurora.mjs</code> — local model provider wiring</td><td><code>lib/github.mjs</code> — issue read, branch/commit/push, PR create, comment post tools</td></tr>
+        <tr><td><code>lib/approvals.mjs</code> — durable approval hook + doc family</td><td>Reviewer role config + verdict schema (<code>structuredOutput</code>)</td></tr>
+        <tr><td><code>lib/podman-sandbox.mjs</code> — sandboxed ExecutionEnv</td><td>Evidence packager (diff + test output + transcript excerpts → PR body/comment)</td></tr>
+        <tr><td>Subagent fan-out pattern (<code>03-subagents.mjs</code>, <code>lib/worker.mjs</code>)</td><td>Webhook/intake adapter (issue event → <code>submit({requestId: "issue-&lt;n&gt;"})</code>)</td></tr>
+        <tr><td>SSE/Telegram client patterns (<code>05-sse.mjs</code>, <code>06-telegram.mjs</code>)</td><td>Merge-gate tool (<code>gh pr merge</code> behind the approval hook)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Role configuration</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Role</th><th>Model (initially)</th><th>Tools</th><th>Execution env</th><th>Replay notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Orchestrator</strong></td><td>Qwen3.8-27B</td><td><code>delegate</code>, GitHub read tools, instructions doc</td><td>Local (no shell)</td><td>Read-only: <code>replay: "safe"</code></td></tr>
+        <tr><td><strong>Worker</strong></td><td>Qwen3.8-27B</td><td><code>read/write/edit/bash</code> + git</td><td>Podman sandbox, <code>cwd=/work/fixture</code></td><td>Git push is external side effect → draft-PR only; branch-scoped, no force-push</td></tr>
+        <tr><td><strong>Reviewer</strong></td><td>Qwen3.8-27B (cheaper variant later)</td><td><code>read</code>, <code>bash</code> restricted to test commands</td><td>Own checkout, read-only mount</td><td>All read-only: <code>replay: "safe"</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 5. PHASES -->
+<section id="phases">
+  <h2><span class="num">5</span> Phases &amp; gates</h2>
+  <p class="lede">Six gated phases plus a measurement phase. Gates are objective — no model judgment calls on pass/fail.</p>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">0</span><h3>Fixture &amp; intake wiring</h3></div>
+    <ul>
+      <li><strong>Setup:</strong> small private GitHub fixture repo (~500-line Node/Python service) with a working test suite. Seed <strong>four</strong> issues: three bounded, well-specified tasks + <strong>one trap</strong> (an issue where the obvious fix is subtly wrong).</li>
+      <li><strong>Intake:</strong> webhook adapter maps <code>issues</code> event with label <code>agent</code> → <code>POST /tasks { content: &lt;issue as &lt;untrusted&gt; data&gt;, requestId: "issue-&lt;n&gt;" }</code>.</li>
+      <li><strong>Tests:</strong> open issue #1 → exactly one run. Simulate webhook double-delivery → no second run, same submission returned. Verify issue text enters the transcript as delimited untrusted data.</li>
+    </ul>
+    <div class="gate"><b>Gate G0:</b> exactly-once intake under simulated retry; issue content enters as data, not instructions.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">1</span><h3>Intake &amp; orchestration</h3></div>
+    <ul>
+      <li>Issue #1 flows unattended: orchestrator reads the issue, plans, spawns the worker subagent in the sandbox on branch <code>agent/issue-1</code>, and the worker produces a commit + <strong>draft PR</strong> (merge stays gated).</li>
+    </ul>
+    <div class="gate"><b>Gate G1:</b> a real issue yields a draft PR with no human intervention between webhook and PR creation.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">2</span><h3>Worker quality</h3><span class="p-tag">⚠️ the key risk</span></div>
+    <ul>
+      <li>Run all three good issues end-to-end. Objective checks per issue (no model judgment): test suite passes on the resulting branch · diff scoped to the issue (≤ 3 files outside obvious scope) · the specific behavior named in the issue is fixed (fixture issues are chosen so this is script-checkable).</li>
+    </ul>
+    <div class="gate"><b>Gate G2:</b> <strong>≥ 2 of 3 issues produce a passing, scoped PR with zero human edits.</strong> This acceptance rate decides whether local models can hold the implementation role.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">3</span><h3>Independent reviewer — the negative test matters</h3></div>
+    <ul>
+      <li>Reviewer subagent: own checkout of the worker's branch, read-only tools + <code>bash</code> restricted to the test suite; emits <code>structuredOutput { verdict: pass|fail, evidence[], concerns[] }</code>.</li>
+      <li><strong>Negative test (the one that counts):</strong> on the trap issue's worker output → must return <code>fail</code> with a reason pointing at the actual bug, not a superficial complaint.</li>
+      <li>Positive control: known-good branch → <code>pass</code> without spurious concerns. Orchestrator branches on the verdict (fail → file findings, no merge PR).</li>
+    </ul>
+    <div class="gate"><b>Gate G3:</b> trap caught with correct reason; good branch passed. A reviewer that passes everything fails this gate by definition.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">4</span><h3>Evidence &amp; human checkpoint</h3></div>
+    <ul>
+      <li><strong>Evidence packager:</strong> on reviewer pass, assemble the PR description (diff summary, test output, transcript excerpts, reviewer verdict). Verify all sections present.</li>
+      <li><strong>Merge gate:</strong> <code>gh pr merge</code> tool is approval-gated; approve via Telegram inline button → merge executes.</li>
+      <li><strong>Crash test:</strong> SIGKILL the factory process while merge-approval is pending → restart → approve → merge executes <strong>exactly once</strong> (one merge commit, no duplicate PR state).</li>
+    </ul>
+    <div class="gate stop"><b>Gate G4:</b> evidence complete on the PR; exactly-once merge across crash. <strong>Failure here stops the PoC</strong> — an exactly-once violation with real side effects.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">5</span><h3>Feedback loop</h3></div>
+    <ul>
+      <li>Take a concrete reviewer finding from Phases 2–3 (e.g., "worker didn't add a regression test"). Orchestrator records the lesson in its instructions document (or files a follow-up task). Re-run the same or analogous issue → the corrected behavior appears (regression test present this time).</li>
+    </ul>
+    <div class="gate"><b>Gate G5:</b> one concrete, verifiable instance of "the same mistake doesn't recur." This is the difference between an agent runner and a factory.</div>
+  </div>
+
+  <div class="phase">
+    <div class="p-head"><span class="p-num">6</span><h3>Measurement &amp; sizing</h3></div>
+    <ul>
+      <li>Collect per issue: tokens in/out (<code>pi.usage</code> doc), wall time, tool-call count, self-corrected errors, human interventions, acceptance (passed G2 checks without edits).</li>
+      <li>Compare against the existing PoC's toy-battery numbers (medians 2.2s / 5.1s / 13.2s per turn) to size real tasks.</li>
+    </ul>
+    <div class="gate"><b>No gate.</b> This data drives later decisions: model pool, optional cloud provider for the worker role, overnight batch throughput on one GPU.</div>
+  </div>
+</section>
+
+<!-- 6. FALLBACKS -->
+<section id="fallbacks">
+  <h2><span class="num">6</span> Decision points &amp; fallbacks</h2>
+  <p class="lede">Every gate failure has a pre-decided, actionable response — no ad-hoc judgment at the moment of failure.</p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Trigger</th><th>Decision / fallback</th></tr></thead>
+      <tbody>
+        <tr><td>G2 &lt; 2/3 acceptance</td><td>Local models not ready for the implementation role. Options in order: (1) stronger local model if hardware allows; (2) cloud provider for the <strong>worker role only</strong> — provider config is per-conversation and swappable, no re-architecture; (3) descope the factory to triage + review with human implementation.</td></tr>
+        <tr><td>G3 misses the trap after instruction tightening</td><td>Agent review becomes advisory (verdict posted on PR, human decides); keep building the loop, revisit with a stronger reviewer model later.</td></tr>
+        <tr><td>G4 double-merge or lost merge state</td><td><strong>Stop.</strong> Audit the approval/merge tool's idempotency design before anything else ships; this is the one failure that can't be papered over.</td></tr>
+        <tr><td>G5 no observable behavior change</td><td>Feedback loop stays manual (human updates instructions); the honest claim becomes "durable agent runner with review gates," not "self-improving factory."</td></tr>
+        <tr><td>Phase 6 latency/cost far above toy-battery expectations</td><td>Revisit role model assignments and batch cadence before scaling issue volume.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 7. MEASUREMENT -->
+<section id="measurement">
+  <h2><span class="num">7</span> Measurement plan</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Metric</th><th>Source</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td>Tokens in/out per conversation</td><td><code>pi.usage</code> document (per-conversation tracking)</td><td>Cost sizing, Phase 6 decisions</td></tr>
+        <tr><td>Wall time per issue (webhook → merged PR)</td><td>Timestamps: submission entry, PR-created tool call, merge commit</td><td>Throughput expectations</td></tr>
+        <tr><td>Tool calls / self-corrected errors</td><td>Transcript entries</td><td>Model reliability trend vs. the existing PoC's battery</td></tr>
+        <tr><td>Acceptance rate</td><td>G2 objective checks</td><td>The F2 decision number</td></tr>
+        <tr><td>Human interventions</td><td>Approval docs + steer submissions</td><td>Autonomy level actually achieved</td></tr>
+        <tr><td>Reviewer precision/recall</td><td>G3 outcomes (trap caught, good passed)</td><td>Reviewer role viability</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <b class="label">Replayable by construction</b>
+    All data lives in committed state (transcripts, documents), so the measurement itself is replayable — consistent with the factory's own replayability requirement.
+  </div>
+</section>
+
+<!-- 8. EFFORT -->
+<section id="effort">
+  <h2><span class="num">8</span> Effort estimate</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Phase</th><th>Work</th><th>Estimate</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Fixture repo + seeded issues + webhook adapter + idempotency test</td><td>1–2 days</td></tr>
+        <tr><td>1</td><td>Orchestrator wiring, worker role config, draft-PR flow</td><td>1 day (mostly reuse)</td></tr>
+        <tr><td>2</td><td>Run battery + objective check scripts</td><td>0.5–1 day</td></tr>
+        <tr><td>3</td><td>Reviewer role + verdict schema + negative test</td><td>1 day</td></tr>
+        <tr><td>4</td><td>Evidence packager + merge gate + crash test</td><td>1 day</td></tr>
+        <tr><td>5</td><td>Feedback wiring + re-run</td><td>0.5 day</td></tr>
+        <tr><td>6</td><td>Metrics extraction + write-up</td><td>0.5 day</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>Total: ~5–7 focused days</strong>, with roughly 70% of the plumbing already written in <code>../PiDurable/poc</code>. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave. That's tuning work, not building.</p>
+</section>
+
+<!-- 9. RISKS -->
+<section id="risks">
+  <h2><span class="num">9</span> Risks (PoC-relevant subset)</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>Local-model quality on real tasks (F2)</td><td><strong>High</strong></td><td>It <em>is</em> the point of Phase 2; fallbacks in §6 keep every outcome actionable</td></tr>
+        <tr><td>Reviewer rubber-stamping (F3)</td><td>Medium</td><td>Negative test is a hard gate; structured verdict forces evidence, not vibes</td></tr>
+        <tr><td>Git side-effect idempotency (F4)</td><td>Medium</td><td>Branch-scoped pushes only, no force-push, approval-gated merge; crash test is explicit</td></tr>
+        <tr><td>Injection via issue text/comments</td><td>Medium</td><td><code>&lt;untrusted&gt;</code> delimiters (verified pattern); worker sandbox has no host secrets; reviewer read-only</td></tr>
+        <tr><td>Experimental Pi Durable API shifting mid-PoC</td><td>Low–Med</td><td>Pin exact versions; harness sits behind the thin HTTP API so breakages are contained</td></tr>
+        <tr><td>Fixture too easy / too hard to discriminate</td><td>Medium</td><td>Calibrate in Phase 0: a good issue should take ~10–30 tool calls, not 3 or 300</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 10. CONVENTIONS -->
+<section id="conventions">
+  <h2><span class="num">10</span> Conventions (carried into implementation)</h2>
+  <ul>
+    <li><strong>Request IDs:</strong> <code>issue-&lt;n&gt;</code> for intake, <code>job-&lt;date&gt;-&lt;slug&gt;</code> for scheduled follow-ups — always client-chosen, never generated server-side, so retries are safe by construction.</li>
+    <li><strong>Branch naming:</strong> <code>agent/issue-&lt;n&gt;</code>; one branch per issue; no force-push ever (a new attempt = a new branch).</li>
+    <li><strong>Approval semantics:</strong> use <strong>per-execution nonces</strong> in the approval key (<code>sha1(tool + args + nonce)</code>), fixing the per-distinct-action persistence observed in the existing PoC — for a factory, re-running an approved merge must require fresh approval.</li>
+    <li><strong>Untrusted input:</strong> issue titles/bodies/comments and all fetched content enter transcripts only inside <code>&lt;untrusted&gt;</code> delimiters; consuming roles get no write tools beyond their scoped duties.</li>
+    <li><strong>Version pins:</strong> exact versions of <code>pi-durable</code>, <code>pi-ai</code>, <code>chord</code> recorded in the PoC's lockfile and in this plan's results write-up.</li>
+  </ul>
+
+  <h3>Relationship to the existing PoC — file map</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Existing artifact</th><th>Role in this PoC</th></tr></thead>
+      <tbody>
+        <tr><td><code>poc/lib/aurora.mjs</code></td><td>Reused as-is (provider wiring + documented gotchas)</td></tr>
+        <tr><td><code>poc/lib/approvals.mjs</code></td><td>Reused; extended with per-execution approval nonces (§10)</td></tr>
+        <tr><td><code>poc/lib/podman-sandbox.mjs</code></td><td>Reused as-is for worker env; reviewer gets a read-only variant</td></tr>
+        <tr><td><code>poc/lib/worker.mjs</code>, <code>03-subagents.mjs</code></td><td>Pattern source for orchestrator + role fan-out</td></tr>
+        <tr><td><code>05-sse.mjs</code>, <code>06-telegram.mjs</code></td><td>Client patterns reused for progress streaming + merge-approval buttons</td></tr>
+        <tr><td><code>10-bench.mjs</code></td><td>Battery harness pattern reused for Phase 2 objective checks</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Software Factory PoC Plan · Proposed 2026-10-18 · <code>research/poc-plan-factory.html</code> · Sources: <a href="coding-agent-software-factories.html">factory research report</a> · <a href="pi-durable-feasibility.md">Pi Durable feasibility assessment</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

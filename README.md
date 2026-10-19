@@ -9,6 +9,7 @@ Research repository on **coding agent software factories** — how autonomous co
 | [`research/coding-agent-software-factories.md`](research/coding-agent-software-factories.md) | Research notes: the concept, anatomy, evolution timeline (2019 → Feb 2026), products & platforms, design principles, reported results |
 | [`research/coding-agent-software-factories.html`](research/coding-agent-software-factories.html) | Self-contained HTML report of the same research (open in a browser; no external dependencies) |
 | [`research/pi-durable-feasibility.md`](research/pi-durable-feasibility.md) | Feasibility assessment: building a software factory on `@earendil-works/pi-durable`, with requirement mapping, PoC evidence, gaps, risks, and a recommended build path |
+| [`research/poc-plan-factory.md`](research/poc-plan-factory.md) · [HTML](research/poc-plan-factory.html) | Proposed PoC plan: the "issue → reviewed PR" loop on Pi Durable — phases, gates, fallbacks, measurement, effort estimate |
 
 ## Key findings
 
