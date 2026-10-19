@@ -1,0 +1,27 @@
+# Software Factory
+
+Research repository on **coding agent software factories** — how autonomous coding agents are organized into production pipelines ("tickets in, reviewed pull requests out") — plus a feasibility assessment of building such a factory on **Pi Durable**.
+
+## Contents
+
+| File | What it is |
+|---|---|
+| [`research/coding-agent-software-factories.md`](research/coding-agent-software-factories.md) | Research notes: the concept, anatomy, evolution timeline (2019 → Feb 2026), products & platforms, design principles, reported results |
+| [`research/coding-agent-software-factories.html`](research/coding-agent-software-factories.html) | Self-contained HTML report of the same research (open in a browser; no external dependencies) |
+| [`research/pi-durable-feasibility.md`](research/pi-durable-feasibility.md) | Feasibility assessment: building a software factory on `@earendil-works/pi-durable`, with requirement mapping, PoC evidence, gaps, risks, and a recommended build path |
+
+## Key findings
+
+**What a software factory is.** A managed system for producing software with repeatable inputs (tickets, alerts, webhooks), standardized tooling and isolated runtimes, measurable output, and retained context. The factory is the *process around* the agents: intake → runtime → implementation → independent review → verification → human approval at merge. Agents run unattended; humans own the merge.
+
+**Evolution.** Code completion (2019) → AI pair programmers (Copilot/Cursor) → agent swarms ("throw tokens at it": Devin, Factory, 8090) → foundation-model inflection (Claude Code, GPT-5's 256K context) → agent managers (VibeKanban, Conductor, Codex app) → the Ralph Wiggums technique → true orchestrators (GasTown, Claude Flow, Sgai) → "dark factories" with humans out of the loop (StrongDM's Attractor).
+
+**Pi Durable feasibility: high.** Every core factory primitive is a Pi Durable first-class feature, and a companion PoC verified nearly all of them under crash conditions (SIGKILL mid-run recovery, exactly-once intake, crash-durable approval gates, sandboxed per-conversation execution, lossless streaming). What remains is glue work (GitHub/ticket integration, evidence packaging, CI gating) plus two structural risks: local-model quality on long-horizon coding, and the experimental API.
+
+## Methodology
+
+Compiled 2026-10-18 from primary sources — factory.com, islo.dev, warp.dev, sandgarden.com (Cirello's "The Evolution of AI Factories"), guild.ai — cross-checked against a local Pi Durable proof-of-concept (PoC) run on local models. All claims in the reports carry source links; customer-reported metrics are labeled as such.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
