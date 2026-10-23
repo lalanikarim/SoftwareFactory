@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-18 · Status: proposed · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-19 · Status: Phase 0 complete (G0 passed) · Phases 1–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -22,6 +22,27 @@ Three prior bodies of work make this plan possible:
 | What do end-to-end latency and token cost look like on realistic tasks? | 6 |
 
 This PoC deliberately does **not** re-test harness durability, SSE reconnect, sandbox isolation, or compaction — those gates already passed with evidence.
+
+## 1a. Phase 0 results (2026-10-19)
+
+**Gate G0: PASS — 8/8 checks**, no GPU required (`node poc-factory/01-intake-g0.mjs`):
+
+1. Agent-labeled issue event starts exactly one submission (`requestId = issue-<n>`).
+2. Simulated double-delivery (new `X-GitHub-Delivery`, same issue) yields **no second run**; the same submission is returned.
+3./4. Events without the `agent` label (opened or labeled-with-other) are not forwarded.
+5. Late `agent` label on an already-processed issue re-submits to the *same* run — no duplicate.
+6. Issue content, including seeded prompt-injection text in the body, is confined to `<untrusted>` delimiters; the do-not-follow wrapper stays outside them.
+7. JSONL audit log records every event with delivery id + requestId (replayable intake).
+8. Pure intake helpers behave as specified.
+
+**Design decision (F1 resolved):** the adapter is deliberately stateless w.r.t. retries — dedup happens at the durable server's `submit()` via the client-chosen `requestId` (crash-verified in `../PiDurable/poc/02-durable.mjs`, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.
+
+**Artifacts:**
+
+- Fixture repo: [`lalanikarim/factory-fixture`](https://github.com/lalanikarim/factory-fixture) (private) — dependency-free Node ledger service, 17/17 tests passing. Seeded issues: #1 unknown-id 500→404 (bounded), #2 status filter on `GET /invoices` (bounded feature), #3 `/summary` counts voided invoices (subtle spec violation), #4 `withRetry` never surfaces upstream 5xx errors (**trap** — obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status).
+- Implementation: [`lalanikarim/pi-agent#3`](https://github.com/lalanikarim/pi-agent/pull/3) — `poc-factory/{lib/intake.mjs, 01-intake-g0.mjs, README.md}`.
+
+**Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
 
 ## 2. Goal & non-goals
 

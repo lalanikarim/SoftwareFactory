@@ -148,8 +148,8 @@
     <h1>Software Factory PoC Plan</h1>
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
-      <span class="chip">Date <b>2026-10-18</b></span>
-      <span class="chip">Status <b>Proposed</b></span>
+      <span class="chip">Date <b>2026-10-19</b></span>
+      <span class="chip">Status <b>Phase 0 complete · G0 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -159,6 +159,7 @@
 <nav class="toc">
   <div class="wrap">
     <a href="#context">Context</a>
+    <a href="#phase0-results">Phase 0 results</a>
     <a href="#goal">Goal</a>
     <a href="#assumptions">Assumptions</a>
     <a href="#architecture">Architecture</a>
@@ -196,6 +197,37 @@
         <tr><td>What do end-to-end latency and token cost look like on realistic tasks?</td><td><strong>6</strong></td></tr>
       </tbody>
     </table>
+  </div>
+</section>
+
+<!-- 1a. PHASE 0 RESULTS -->
+<section id="phase0-results">
+  <h2><span class="num">1a</span> Phase 0 results (2026-10-19)</h2>
+
+  <div class="callout">
+    <b class="label">Gate G0 — pass · 8/8 checks · no GPU required</b>
+    <code>node poc-factory/01-intake-g0.mjs</code>: agent-labeled issue event starts exactly one submission (<code>requestId = issue-&lt;n&gt;</code>) · simulated double-delivery (new <code>X-GitHub-Delivery</code>, same issue) yields <strong>no second run</strong> — the same submission is returned · events without the <code>agent</code> label are not forwarded · late <code>agent</code> label on a processed issue re-submits to the <em>same</em> run · issue content, including seeded prompt-injection text, is confined to <code>&lt;untrusted&gt;</code> delimiters with the do-not-follow wrapper outside them · JSONL audit log records every event (replayable intake) · pure intake helpers behave as specified.
+  </div>
+
+  <h3>Design decision (F1 resolved)</h3>
+  <p>The adapter is deliberately <strong>stateless w.r.t. retries</strong>: GitHub redeliveries carry new delivery ids but the same issue, so exactly-once holds at the durable server's <code>submit()</code> via the client-chosen <code>requestId</code> (crash-verified in <code>../PiDurable/poc/02-durable.mjs</code>, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.</p>
+
+  <h3>Artifacts</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Artifact</th><th>Location</th></tr></thead>
+      <tbody>
+        <tr><td>Fixture repo (private) — dependency-free Node ledger service, 17/17 tests passing</td><td><a href="https://github.com/lalanikarim/factory-fixture">lalanikarim/factory-fixture</a></td></tr>
+        <tr><td>Intake adapter + G0 battery</td><td><a href="https://github.com/lalanikarim/pi-agent/pull/3">lalanikarim/pi-agent#3</a> — <code>poc-factory/{lib/intake.mjs, 01-intake-g0.mjs}</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Seeded issues: #1 unknown-id 500→404 (bounded) · #2 status filter on <code>GET /invoices</code> (bounded feature) · #3 <code>/summary</code> counts voided invoices (subtle spec violation) · #4 <code>withRetry</code> never surfaces upstream 5xx errors (<strong>trap</strong> — the obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status). Issues are created <em>without</em> the <code>agent</code> label; labeling is the intake trigger and should happen only when a phase run is meant to start.</p>
+
+  <div class="callout">
+    <b class="label">Next</b>
+    Phase 1 — orchestrator wiring: issue → plan → worker subagent in Podman sandbox → commit + draft PR (reuses <code>poc/lib/{aurora,podman-sandbox,worker}.mjs</code> and the fan-out pattern from <code>poc/03-subagents.mjs</code>). Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
   </div>
 </section>
 
