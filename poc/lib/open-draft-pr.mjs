@@ -80,7 +80,8 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef 
       const reviewId = await api.createTask(
         factoryReviewerTask,
         { branch, issueNumber, ...modelRef },
-        {},
+        { ownership: { kind: "task", taskId: api.taskId } },
+        ctx,
       );
       const settled = await api.waitForTask(reviewId, ctx);
       const outcome = settled.state.outcome;
