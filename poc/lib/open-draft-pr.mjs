@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { reviewOutcomes } from "./factory-reviewer.mjs";
+import { factoryReviewerTask } from "./factory-reviewer.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -48,34 +48,48 @@ async function pushBranch(ws, branch, ghToken) {
   }
 }
 
-export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "" }) {
+export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef }) {
   return defineTool({
     name: "open_draft_pr",
     description:
-      "Push the worker's branch agent/issue-<n> and open a DRAFT pull request for it (never merges). Idempotent: returns the existing draft PR if one is already open for the branch. Include the test result in the PR body.",
+      "Push the worker's branch agent/issue-<n> and open a DRAFT pull request for it (never merges). BEFORE pushing it runs an independent read-only review of the committed branch; if the review fails, no push or PR happens and the findings are returned. Idempotent: returns the existing draft PR if one is already open for the branch. Include the test result in the PR body.",
     parameters: Type.Object({
       issueNumber: Type.Integer(),
       title: Type.String(),
       summary: Type.String(),
     }),
     replay: "unsafe", // external side effects (push + PR create); idempotent by head branch
-    execute: async ({ issueNumber, title, summary }) => {
+    execute: async ({ issueNumber, title, summary }, api, ctx) => {
       const ws = join(workDir, `issue-${issueNumber}`);
       const branch = `agent/issue-${issueNumber}`;
       const env = { ...process.env, GH_TOKEN: ghToken };
 
-      // Structural gate (not prompt-dependent): a draft PR requires a recorded
-      // PASSING independent review of this branch. Fail-closed on restart.
-      const verdict = reviewOutcomes.get(branch);
+      // Verify the worker actually committed on the branch (cheap; before
+      // spending minutes on a review of nothing).
+      let head;
+      try {
+        head = await sh("git", ["-C", ws, "rev-parse", "--verify", `refs/heads/${branch}`]);
+      } catch {
+        return { output: [{ type: "text", text: JSON.stringify({ error: `no local branch ${branch} in ${ws} — the worker did not commit` }) }] };
+      }
+      const log = await sh("git", ["-C", ws, "log", "--oneline", `-3`, branch]);
+
+      // Structural gate (not prompt-dependent): run an independent read-only
+      // review of the committed branch NOW; only push if it passes. The
+      // orchestrator model cannot skip this — the gate owns its evidence.
+      const reviewId = await api.createTask(
+        factoryReviewerTask,
+        { branch, issueNumber, ...modelRef },
+        {},
+      );
+      const settled = await api.waitForTask(reviewId, ctx);
+      const outcome = settled.state.outcome;
+      const verdict = outcome?.status === "completed" ? outcome.result : null;
       if (!verdict || verdict.verdict !== "pass") {
         return {
-          output: [{ type: "text", text: JSON.stringify({ error: `refused: no passing independent review recorded for ${branch} — call review first` }) }],
+          output: [{ type: "text", text: JSON.stringify({ refused: true, review: verdict ?? { error: "review did not settle" } }) }],
         };
       }
-
-      // Verify the worker actually committed on the branch.
-      const head = await sh("git", ["-C", ws, "rev-parse", "--verify", `refs/heads/${branch}`]);
-      const log = await sh("git", ["-C", ws, "log", "--oneline", `-3`, branch]);
 
       const tests = await runTestSuite(ws);
       await pushBranch(ws, branch, ghToken);
@@ -95,10 +109,15 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "" }) {
       if (prJson) {
         prUrl = prJson.url;
       } else {
+        const reviewSummary = (verdict.evidence ?? []).slice(0, 3).map((e) => `- ${e}`).join("\n");
         const body = [
           `Fixes #${issueNumber}.`,
           "",
           summary,
+          "",
+          "## Independent review (read-only subagent)",
+          "PASS",
+          reviewSummary,
           "",
           "## Worker report",
           "```",

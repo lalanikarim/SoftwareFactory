@@ -32,11 +32,6 @@ async function sh(cmd, args, opts = {}) {
  *  Keyed by conversation because api.taskId inside a tool call is the internal
  *  pi.tool task, not the owning factory.reviewer task. */
 export const verdictRegistry = new Map();
-/** branch -> verdict, written by the review tool when a reviewer task settles.
- *  Read by open_draft_pr as a structural gate (the orchestrator model cannot skip
- *  review and still open a PR). In-process: a factory restart clears it, which is
- *  fail-closed (no PR without a fresh review) and consistent with durable state. */
-export const reviewOutcomes = new Map();
 /** conversationId -> PodmanSandboxEnv for run_tests (api.taskId inside a tool call
  *  is the internal pi.tool task, not the owning factory.reviewer task). */
 const reviewerSandboxByConv = new Map();
@@ -52,10 +47,17 @@ async function fetchIssue(fixturesRepo, issueNumber) {
   });
 }
 
-async function prepareReviewWorkspace({ workDir, fixturesRepo, branch }) {
+async function prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumber }) {
   const ws = reviewWorkspace(workDir, branch);
   rmSync(ws, { recursive: true, force: true });
-  await sh("git", ["clone", "--quiet", "--branch", branch, `https://github.com/${fixturesRepo}.git`, ws]);
+  try {
+    await sh("git", ["clone", "--quiet", "--branch", branch, `https://github.com/${fixturesRepo}.git`, ws]);
+  } catch {
+    // Branch not yet pushed (closed loop: review runs BEFORE the push).
+    // Clone locally from the worker's checkout — same commit, no remote write.
+    const local = join(workDir, `issue-${issueNumber}`);
+    await sh("git", ["clone", "--quiet", "--branch", branch, local, ws]);
+  }
   return ws;
 }
 
@@ -166,7 +168,7 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
 
         // Host-side prep (deterministic).
         const issueText = await fetchIssue(fixturesRepo, issueNumber);
-        const ws = await prepareReviewWorkspace({ workDir, fixturesRepo, branch });
+        const ws = await prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumber });
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
         const tools = runtime.registry
@@ -255,9 +257,6 @@ export function factoryReviewTool({ taskDef, modelRef }) {
       );
       const settled = await api.waitForTask(id, ctx);
       const outcome = settled.state.outcome;
-      if (outcome.status === "completed" && outcome.result) {
-        reviewOutcomes.set(args.branch, outcome.result);
-      }
       return {
         output: [
           {
