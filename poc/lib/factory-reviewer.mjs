@@ -32,6 +32,11 @@ async function sh(cmd, args, opts = {}) {
  *  Keyed by conversation because api.taskId inside a tool call is the internal
  *  pi.tool task, not the owning factory.reviewer task. */
 export const verdictRegistry = new Map();
+/** branch -> verdict, written by the review tool when a reviewer task settles.
+ *  Read by open_draft_pr as a structural gate (the orchestrator model cannot skip
+ *  review and still open a PR). In-process: a factory restart clears it, which is
+ *  fail-closed (no PR without a fresh review) and consistent with durable state. */
+export const reviewOutcomes = new Map();
 /** conversationId -> PodmanSandboxEnv for run_tests (api.taskId inside a tool call
  *  is the internal pi.tool task, not the owning factory.reviewer task). */
 const reviewerSandboxByConv = new Map();
@@ -103,13 +108,16 @@ export function makeReviewerRoleTools({ workDir }) {
     execute: async (_args, api, _ctx) => {
       const sandbox = reviewerSandboxByConv.get(api.conversationId);
       if (!sandbox) throw new Error("no sandbox for this reviewer conversation");
-      let out;
+      let out = "";
+      let res;
       try {
-        const res = await sandbox.exec("node --test", { timeoutMs: 300_000 });
-        out = res.stdout + "\n" + res.stderr;
+        // exec streams output via onOutput (the result carries only exitCode);
+        // timeout is in SECONDS per the ExecutionEnv contract.
+        res = await sandbox.exec("node --test", { timeout: 300, onOutput: (t) => (out += t) });
       } catch (e) {
-        out = String(e.message); // non-zero exit or timeout — include output if present
+        res = { ok: false, error: { message: String(e.message) } };
       }
+      if (!res.ok) out += "\n[exec error: " + (res.error?.message ?? "unknown") + "]";
       const pass = [...out.matchAll(/^# pass (\d+)$/gm)].map((m) => Number(m[1])).reduce((a, b) => a + b, 0);
       const fail = [...out.matchAll(/^# fail (\d+)$/gm)].map((m) => Number(m[1])).reduce((a, b) => a + b, 0);
       return { output: [{ type: "text", text: `suite: pass=${pass} fail=${fail}\n\n${out.slice(-2500)}` }] };
@@ -247,6 +255,9 @@ export function factoryReviewTool({ taskDef, modelRef }) {
       );
       const settled = await api.waitForTask(id, ctx);
       const outcome = settled.state.outcome;
+      if (outcome.status === "completed" && outcome.result) {
+        reviewOutcomes.set(args.branch, outcome.result);
+      }
       return {
         output: [
           {

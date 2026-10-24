@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
+import { reviewOutcomes } from "./factory-reviewer.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -62,6 +63,15 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "" }) {
       const ws = join(workDir, `issue-${issueNumber}`);
       const branch = `agent/issue-${issueNumber}`;
       const env = { ...process.env, GH_TOKEN: ghToken };
+
+      // Structural gate (not prompt-dependent): a draft PR requires a recorded
+      // PASSING independent review of this branch. Fail-closed on restart.
+      const verdict = reviewOutcomes.get(branch);
+      if (!verdict || verdict.verdict !== "pass") {
+        return {
+          output: [{ type: "text", text: JSON.stringify({ error: `refused: no passing independent review recorded for ${branch} — call review first` }) }],
+        };
+      }
 
       // Verify the worker actually committed on the branch.
       const head = await sh("git", ["-C", ws, "rev-parse", "--verify", `refs/heads/${branch}`]);
