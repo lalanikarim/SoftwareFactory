@@ -79,7 +79,7 @@ export async function startFactory({ port = 0, rootDir } = {}) {
   // Reviewer: independent read-only subagent; its verdict gates PR creation.
   const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo });
   const reviewerRoleTools = makeReviewerRoleTools({ workDir });
-  const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef });
+  const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef, reviewerTaskDef });
   registry.install(
     defineExtension({
       name: "factory",

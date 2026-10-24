@@ -11,7 +11,6 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { factoryReviewerTask } from "./factory-reviewer.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -48,7 +47,7 @@ async function pushBranch(ws, branch, ghToken) {
   }
 }
 
-export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef }) {
+export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef, reviewerTaskDef }) {
   return defineTool({
     name: "open_draft_pr",
     description:
@@ -78,7 +77,7 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef 
       // review of the committed branch NOW; only push if it passes. The
       // orchestrator model cannot skip this — the gate owns its evidence.
       const reviewId = await api.createTask(
-        factoryReviewerTask,
+        reviewerTaskDef,
         { branch, issueNumber, ...modelRef },
         { ownership: { kind: "task", taskId: api.taskId } },
         ctx,
