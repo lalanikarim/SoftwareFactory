@@ -233,7 +233,7 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 ### Backlog (tracked tasks)
 
-- **Inference host / model agnostic wiring.** Both repos should select the inference host/model by configuration only. Upstream: `pi-agent` hardcodes provider id `aurora` in `poc/lib/aurora.mjs` + 12 scripts (~26 sites) — tracked as [pi-agent#17](https://github.com/lalanikarim/pi-agent/issues/17). Local: once upstream is generalized, switch `poc/lib/factory.mjs`, `factory-worker.mjs`, and `factory-reviewer.mjs` from the hardcoded `provider: "aurora"` to config-driven provider/model (env vars), and retire any vendored model-wiring workarounds. Unblocks F2's cloud fallback and Phase 6 multi-model sizing without per-host code changes.
+- ~~**Inference host / model agnostic wiring.**~~ **Done (2026-10-24).** Upstream: [pi-agent#17](https://github.com/lalanikarim/pi-agent/issues/17) resolved by PR #18 — `poc/lib/model.mjs` with env-driven config (`PI_PROVIDER_ID`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `PI_MODEL_ID`; defaults keep historical behavior). Local: `factory.mjs`, `factory-worker.mjs`, `factory-reviewer.mjs`, and the G3 battery now resolve provider/model via `localModels()`/`providerId()`/`modelId()` — no hardcoded provider ids remain in factory code. Switching inference host is now a `.env` change only; F2's cloud fallback and Phase 6 multi-model sizing are unblocked.
 
 ## 7. Measurement plan
 

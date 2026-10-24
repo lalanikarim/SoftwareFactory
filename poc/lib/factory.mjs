@@ -15,7 +15,7 @@ import { Harness, createRegistry, defineExtension } from "@earendil-works/pi-dur
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { auroraModels, auroraModelId } from "../../../PiDurable/poc/lib/aurora.mjs";
+import { localModels, providerId, modelId } from "../../../PiDurable/poc/lib/model.mjs";
 import { loadDotEnv } from "../../../PiDurable/poc/lib/env.mjs";
 import { factoryDelegateTool, factoryWorkerTask, sandboxRegistry } from "./factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools, factoryReviewTool } from "./factory-reviewer.mjs";
@@ -61,12 +61,14 @@ export const ORCHESTRATOR_INSTRUCTIONS = [
 
 export async function startFactory({ port = 0, rootDir } = {}) {
   loadFactoryDotEnv();
-  loadDotEnv(); // poc/.env as fallback (e.g. aurora endpoint)
+  loadDotEnv(); // poc/.env as fallback (e.g. inference endpoint)
   const base = rootDir ?? join(__dirname, "..");
   const dataDir = join(base, "data");
   const workDir = join(base, "work");
 
-  const modelId = await auroraModelId();
+  // Inference host/model come from config (PI_PROVIDER_ID / OPENAI_BASE_URL /
+  // OPENAI_API_KEY / PI_MODEL_ID) — see PiDurable poc/lib/model.mjs.
+  const modelRef = { provider: await providerId(), modelId: await modelId() };
   const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
   const ghToken = process.env.FACTORY_GITHUB_TOKEN ?? "";
 
@@ -74,11 +76,11 @@ export async function startFactory({ port = 0, rootDir } = {}) {
   registry.install(CodingTools); // read/write/edit/bash — the worker's role tools
   // The worker task definition MUST be registered for the scheduler to dispatch it.
   const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo });
-  const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelId });
+  const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelRef });
   // Reviewer: independent read-only subagent; its verdict gates PR creation.
   const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo });
   const reviewerRoleTools = makeReviewerRoleTools({ workDir });
-  const review = factoryReviewTool({ taskDef: reviewerTaskDef, modelId });
+  const review = factoryReviewTool({ taskDef: reviewerTaskDef, modelRef });
   const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken });
   registry.install(
     defineExtension({
@@ -92,7 +94,7 @@ export async function startFactory({ port = 0, rootDir } = {}) {
   const harness = await Harness.open(
     await openNodeSqliteStorage(join(dataDir, "factory.sqlite")),
     {
-      models: await auroraModels(),
+      models: await localModels(),
       registry,
       // Worker conversations route to their own Podman sandbox; everything else
       // (the orchestrator) runs in a plain local env under work/.
@@ -108,7 +110,7 @@ export async function startFactory({ port = 0, rootDir } = {}) {
 
   rootConv = await harness.root(ctx, {
     agent: {
-      model: { provider: "aurora", modelId },
+      model: modelRef,
       thinkingLevel: "medium",
       tools: [delegate, review, openDraftPr],
       instructions: ORCHESTRATOR_INSTRUCTIONS,

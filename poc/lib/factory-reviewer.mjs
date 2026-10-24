@@ -154,7 +154,7 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
     initial: () => ({ phase: "spawn" }),
     phases: {
       spawn: guarded("SPAWN", async (task, runtime, ctx) => {
-        const { branch, issueNumber, modelId } = task.input;
+        const { branch, issueNumber, provider, modelId } = task.input;
 
         // Host-side prep (deterministic).
         const issueText = await fetchIssue(fixturesRepo, issueNumber);
@@ -170,7 +170,7 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
           const rec = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
           sandboxRegistry.set(rec.id, sandbox);
           await configure(tx, rec.id, {
-            model: { provider: "aurora", modelId },
+            model: { provider, modelId },
             thinkingLevel: "medium",
             tools,
             instructions: "You are an independent code reviewer. Follow the review procedure in your task exactly and submit exactly one verdict.",
@@ -231,7 +231,7 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
 }
 
 /** Orchestrator-facing review tool. The caller MUST register `taskDef` with the registry. */
-export function factoryReviewTool({ taskDef, modelId }) {
+export function factoryReviewTool({ taskDef, modelRef }) {
   return defineTool({
     name: "review",
     description:
@@ -241,7 +241,7 @@ export function factoryReviewTool({ taskDef, modelId }) {
     execute: async (args, api, ctx) => {
       const id = await api.createTask(
         taskDef,
-        { branch: args.branch, issueNumber: args.issueNumber, modelId },
+        { branch: args.branch, issueNumber: args.issueNumber, ...modelRef },
         { ownership: { kind: "task", taskId: api.taskId } },
         ctx,
       );

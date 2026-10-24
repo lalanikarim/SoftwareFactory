@@ -26,7 +26,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Harness } from "@earendil-works/pi-durable";
-import { auroraModels, auroraModelId } from "../../PiDurable/poc/lib/aurora.mjs";
+import { localModels, providerId, modelId } from "../../PiDurable/poc/lib/model.mjs";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { sandboxRegistry } from "./lib/factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools, factoryReviewTool } from "./lib/factory-reviewer.mjs";
@@ -52,7 +52,7 @@ const results = { t1: null, t2: null, t3: null };
 // ---------------------------------------------------------------------------
 async function preflight() {
   const models = await fetch(`${process.env.OPENAI_BASE_URL}/models`, { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
-  if (!models.ok) throw new Error(`aurora /models returned ${models.status}`);
+  if (!models.ok) throw new Error(`inference endpoint /models returned ${models.status}`);
   await sh("podman", ["image", "exists", "factory-sandbox:latest"]);
   await sh("gh", ["api", `repos/${fixturesRepo}`, "--jq", ".full_name"]);
 }
@@ -161,10 +161,10 @@ async function ensureSeededBadBranch() {
 async function runReviewer({ label, branch, issueNumber }) {
   const base = new URL(".", import.meta.url).pathname;
   const workDir = join(base, "work");
-  const modelId = await auroraModelId();
+  const modelRef = { provider: await providerId(), modelId: await modelId() };
   const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo });
   const reviewerRoleTools = makeReviewerRoleTools({ workDir });
-  const reviewTool = factoryReviewTool({ taskDef: reviewerTaskDef, modelId });
+  const reviewTool = factoryReviewTool({ taskDef: reviewerTaskDef, modelRef });
 
   const registry = createRegistry();
   registry.install(CodingTools);
@@ -173,7 +173,7 @@ async function runReviewer({ label, branch, issueNumber }) {
   const harness = await Harness.open(
     await openNodeSqliteStorage(join(base, `data/g3-reviewer-${label}.sqlite`)),
     {
-      models: await auroraModels(),
+      models: await localModels(),
       registry,
       env: (target) => sandboxRegistry.get(target.conversationId) ?? new NodeExecutionEnv({ cwd: workDir }),
     },
@@ -183,7 +183,7 @@ async function runReviewer({ label, branch, issueNumber }) {
 
   const root = await harness.root(ctx, {
     agent: {
-      model: { provider: "aurora", modelId },
+      model: modelRef,
       thinkingLevel: "medium",
       tools: [reviewTool],
       instructions:
