@@ -149,7 +149,7 @@
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
       <span class="chip">Date <b>2026-10-23</b></span>
-      <span class="chip">Status <b>Phases 0–1 complete · G0, G1 passed</b></span>
+      <span class="chip">Status <b>Phases 0–2 complete · G0, G1, G2 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -161,6 +161,7 @@
     <a href="#context">Context</a>
     <a href="#phase0-results">Phase 0 results</a>
     <a href="#phase1-results">Phase 1 results</a>
+    <a href="#phase2-results">Phase 2 results</a>
     <a href="#goal">Goal</a>
     <a href="#assumptions">Assumptions</a>
     <a href="#architecture">Architecture</a>
@@ -258,6 +259,29 @@
   </div>
 
   <p>G1 delivers a <em>simulated</em> webhook event built from the live issue via <code>gh api</code> (no public URL needed). A draft PR now exists for issue #3 — close it before any re-run of G1 for that issue (the script's preflight asserts this). Phases 2–6 remain; Phase 2 runs issues #1, #2 (and a fresh #3 if desired) and applies the objective G2 checks.</p>
+</section>
+
+<!-- 1c. PHASE 2 RESULTS -->
+<section id="phase2-results">
+  <h2><span class="num">1c</span> Phase 2 results (2026-10-23)</h2>
+
+  <div class="callout">
+    <b class="label">Gate G2 — pass · 3/3 (gate required ≥ 2/3) · zero human edits</b>
+    All three bounded issues produced a passing, scoped draft PR via <code>poc/03-worker-quality-g2.mjs</code>. Objective checks per issue (no model judgment): suite passes on the branch · every changed file under <code>src/</code>, <code>test/</code>, or <code>README.md</code> (≤ 5 files) · named behavior verified against a live server from the branch · PR opened by the factory with no subsequent human edits.
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Issue</th><th>PR</th><th>Wall time (webhook → draft PR)</th><th>Diff</th><th>Suite (host-verified)</th></tr></thead>
+      <tbody>
+        <tr><td>#1 unknown-id 500→404</td><td><a href="https://github.com/lalanikarim/factory-fixture/pull/6">fixture#6</a></td><td>222s</td><td>3 files: <code>statusCode=404</code> on <code>InvoiceNotFoundError</code> (router already maps it), comment fix, regression test</td><td>18/18</td></tr>
+        <tr><td>#2 status filter</td><td><a href="https://github.com/lalanikarim/factory-fixture/pull/7">fixture#7</a></td><td>95s</td><td>4 files: query parsing + 400 on unknown status (per acceptance), <code>STATUSES</code> export, tests, README docs</td><td>19/19</td></tr>
+        <tr><td>#3 summary excludes voided</td><td><a href="https://github.com/lalanikarim/factory-fixture/pull/5">fixture#5</a></td><td>361s (G1 run)</td><td>2 files: skip voided in totals, regression test</td><td>18/18</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>F2 resolved positively:</strong> the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.</p>
 </section>
 
 <!-- 2. GOAL -->
