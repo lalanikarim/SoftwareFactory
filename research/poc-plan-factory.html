@@ -459,6 +459,11 @@
       </tbody>
     </table>
   </div>
+
+  <h3>Backlog (tracked tasks)</h3>
+  <ul>
+    <li><strong>Inference host / model agnostic wiring.</strong> Both repos should select the inference host/model by configuration only. Upstream: <code>pi-agent</code> hardcodes provider id <code>aurora</code> in <code>poc/lib/aurora.mjs</code> + 12 scripts (~26 sites) — tracked as <a href="https://github.com/lalanikarim/pi-agent/issues/17">pi-agent#17</a>. Local: once upstream is generalized, switch <code>poc/lib/factory.mjs</code>, <code>factory-worker.mjs</code>, and <code>factory-reviewer.mjs</code> from the hardcoded <code>provider: "aurora"</code> to config-driven provider/model (env vars), and retire any vendored model-wiring workarounds. Unblocks F2's cloud fallback and Phase 6 multi-model sizing without per-host code changes.</li>
+  </ul>
 </section>
 
 <!-- 7. MEASUREMENT -->

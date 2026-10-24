@@ -231,6 +231,10 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 | G5 no observable behavior change | Feedback loop stays manual (human updates instructions); the honest claim becomes "durable agent runner with review gates," not "self-improving factory" |
 | Latency/cost in Phase 6 far above toy-battery expectations | Revisit role model assignments and batch cadence before scaling issue volume |
 
+### Backlog (tracked tasks)
+
+- **Inference host / model agnostic wiring.** Both repos should select the inference host/model by configuration only. Upstream: `pi-agent` hardcodes provider id `aurora` in `poc/lib/aurora.mjs` + 12 scripts (~26 sites) — tracked as [pi-agent#17](https://github.com/lalanikarim/pi-agent/issues/17). Local: once upstream is generalized, switch `poc/lib/factory.mjs`, `factory-worker.mjs`, and `factory-reviewer.mjs` from the hardcoded `provider: "aurora"` to config-driven provider/model (env vars), and retire any vendored model-wiring workarounds. Unblocks F2's cloud fallback and Phase 6 multi-model sizing without per-host code changes.
+
 ## 7. Measurement plan
 
 | Metric | Source | Used for |
