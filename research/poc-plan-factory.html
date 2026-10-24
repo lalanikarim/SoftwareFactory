@@ -148,8 +148,8 @@
     <h1>Software Factory PoC Plan</h1>
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
-      <span class="chip">Date <b>2026-10-19</b></span>
-      <span class="chip">Status <b>Phase 0 complete · G0 passed</b></span>
+      <span class="chip">Date <b>2026-10-23</b></span>
+      <span class="chip">Status <b>Phases 0–1 complete · G0, G1 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -160,6 +160,7 @@
   <div class="wrap">
     <a href="#context">Context</a>
     <a href="#phase0-results">Phase 0 results</a>
+    <a href="#phase1-results">Phase 1 results</a>
     <a href="#goal">Goal</a>
     <a href="#assumptions">Assumptions</a>
     <a href="#architecture">Architecture</a>
@@ -230,6 +231,33 @@
     <b class="label">Next</b>
     Phase 1 — orchestrator wiring: issue → plan → worker subagent in Podman sandbox → commit + draft PR (reuses <code>poc/lib/{aurora,podman-sandbox,worker}.mjs</code> and the fan-out pattern from <code>poc/03-subagents.mjs</code>). Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
   </div>
+</section>
+
+<!-- 1b. PHASE 1 RESULTS -->
+<section id="phase1-results">
+  <h2><span class="num">1b</span> Phase 1 results (2026-10-23)</h2>
+
+  <div class="callout">
+    <b class="label">Gate G1 — pass · issue #3 → draft PR in 361s · zero human intervention</b>
+    Simulated webhook delivery (issue #3, label <code>agent</code>) → intake adapter (<code>POST /webhook/github</code>, <code>requestId=issue-3</code>) → factory <code>POST /tasks</code> (exactly-once submit) → orchestrator (tools: <code>delegate</code>, <code>open_draft_pr</code> only) → sandboxed worker (Podman, node+git, network=none, no host env): clone on <code>agent/issue-3</code> → fix + regression test → <code>node --test</code> → commit → host-side push + draft PR. Result: <a href="https://github.com/lalanikarim/factory-fixture/pull/5">lalanikarim/factory-fixture#5</a> (draft, head <code>agent/issue-3</code>).
+  </div>
+
+  <h3>Worker output quality (first local-model run)</h3>
+  <p>Minimal scoped diff: one-line fix in <code>src/invoices.mjs</code> (skip voided invoices in totals) plus a 12-line regression test asserting open+paid count and voided is excluded. Suite <strong>18/18 host-verified at PR creation</strong>. A strong G2 candidate for issue #3.</p>
+
+  <h3>Wiring bugs found and fixed during bring-up</h3>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Bug</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Worker task definition must be registered with the harness registry (<code>extension.tasks</code>) or the scheduler never dispatches it — task sat <code>pending</code> indefinitely.</td></tr>
+        <tr><td>2</td><td><code>configure()</code> requires tool <strong>registration objects</strong>, not name strings (the delta tracker strict-JSON-copies the change; string names yield <code>undefined</code>).</td></tr>
+        <tr><td>3</td><td><code>CodingTools</code> must be installed in the registry for the worker's role tools to resolve.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>G1 delivers a <em>simulated</em> webhook event built from the live issue via <code>gh api</code> (no public URL needed). A draft PR now exists for issue #3 — close it before any re-run of G1 for that issue (the script's preflight asserts this). Phases 2–6 remain; Phase 2 runs issues #1, #2 (and a fresh #3 if desired) and applies the objective G2 checks.</p>
 </section>
 
 <!-- 2. GOAL -->

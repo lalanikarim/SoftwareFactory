@@ -17,7 +17,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { startIntakeServer } from "./lib/intake.mjs";
-import { loadDotEnv } from "../PiDurable/poc/lib/env.mjs";
+import { loadDotEnv } from "../../PiDurable/poc/lib/env.mjs";
 
 const pExecFile = promisify(execFile);
 async function sh(cmd, args, opts = {}) {
@@ -156,6 +156,6 @@ if (pr && pr.isDraft && pr.headRefName === `agent/issue-${issueNumber}`) {
   console.log(`\nG1 FAIL — no draft PR for agent/issue-${issueNumber} after ${secs}s${pr ? ` (found non-draft: ${pr.url})` : ""}`);
 }
 
-intake.server.close();
+intake.close();
 await factory.close();
 process.exitCode = pass ? 0 : 1;

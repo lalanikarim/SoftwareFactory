@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-19 · Status: Phase 0 complete (G0 passed) · Phases 1–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-23 · Status: Phases 0–1 complete (G0, G1 passed) · Phases 2–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -45,6 +45,31 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
   _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The Phase 0 files merged into PiDurable remain there as a harmless duplicate until cleaned up._
 
 **Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
+
+## 1b. Phase 1 results (2026-10-23)
+
+**Gate G1: PASS** — fixture issue #3 flowed unattended from a simulated webhook delivery to a **draft PR in 361s**, zero human intervention:
+
+```
+simulated webhook (issue #3, label agent)
+  → intake adapter POST /webhook/github          [requestId=issue-3]
+  → factory POST /tasks                          [exactly-once submit]
+  → orchestrator (tools: delegate, open_draft_pr only)
+  → sandboxed worker (Podman, node+git, network=none, no host env)
+      clone on agent/issue-3 → fix + regression test → node --test → commit
+  → host-side push + draft PR                    [no merge — Phase 4 owns that]
+```
+
+Result: [`lalanikarim/factory-fixture#5`](https://github.com/lalanikarim/factory-fixture/pull/5) (draft, head `agent/issue-3`).
+
+**Worker output quality (first local-model run):** minimal scoped diff — one-line fix in `src/invoices.mjs` (skip voided in totals) plus a 12-line regression test asserting open+paid count and voided is excluded; suite **18/18 host-verified at PR creation**. This is a strong G2 candidate for issue #3.
+
+**Wiring bugs found and fixed during bring-up** (all in `poc/lib/`):
+1. Worker task definition must be registered with the harness registry (`extension.tasks`) or the scheduler never dispatches it — task sat `pending` indefinitely.
+2. `configure()` requires tool **registration objects**, not name strings (the delta tracker strict-JSON-copies the change; string names yield `undefined`).
+3. `CodingTools` must be installed in the registry for the worker's role tools to resolve.
+
+**Notes:** G1 delivers a *simulated* webhook event built from the live issue via `gh api` (no public URL needed). A draft PR now exists for issue #3 — close it before any re-run of G1 for that issue (the script's preflight asserts this). Phases 2–6 remain; Phase 2 runs issues #1, #2 (and a fresh #3 if desired) and applies the objective G2 checks.
 
 ## 2. Goal & non-goals
 
