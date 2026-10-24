@@ -290,20 +290,27 @@ if (!skipChain) {
   });
   if (!(await delivery.json()).accepted) throw new Error("intake rejected issue #4");
 
-  // Wait until this run's worker AND reviewer tasks are terminal (or timeout).
+  // Wait until the chain settles (or timeout). The reviewer task only exists
+  // once open_draft_pr runs it — so "worker terminal + no reviewer yet" is NOT
+  // done; keep waiting until the reviewer is terminal or the whole queue drains
+  // (orchestrator settled without opening a PR).
   // 60 min: the 27B worker on trap issue #4 has taken up to ~30+ minutes.
   const deadline = Date.now() + 60 * 60_000;
   let workerState = null, reviewerState = null;
+  const terminal = (s) => s && ["completed", "failed", "aborted"].includes(s.state.outcome?.status);
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 20_000));
     const page = await factory.rootConversation().commit(
-      (tx) => tx.scanTasks({ kind: "factory.worker" }, 50).then(async (w) => ({ w, r: await tx.scanTasks({ kind: "factory.reviewer" }, 50) })),
+      (tx) => tx.scanTasks({}, 1000).then(async (all) => ({
+        w: all.items.filter((t) => t.kind === "factory.worker"),
+        r: all.items.filter((t) => t.kind === "factory.reviewer"),
+        active: all.items.filter((t) => ["pending", "running", "waiting"].includes(t.state.status)),
+      })),
       ctx,
     );
-    workerState = pick(page.w.items);
-    reviewerState = pick(page.r.items);
-    const terminal = (s) => s && ["completed", "failed", "aborted"].includes(s.state.outcome?.status);
-    if (terminal(workerState) && (reviewerState === null || terminal(reviewerState))) break;
+    workerState = pick(page.w);
+    reviewerState = pick(page.r);
+    if (terminal(workerState) && (terminal(reviewerState) || page.active.length === 0)) break;
     process.stdout.write(".");
   }
   intake.close();
