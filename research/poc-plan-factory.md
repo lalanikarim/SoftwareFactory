@@ -40,7 +40,9 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
 **Artifacts:**
 
 - Fixture repo: [`lalanikarim/factory-fixture`](https://github.com/lalanikarim/factory-fixture) (private) — dependency-free Node ledger service, 17/17 tests passing. Seeded issues: #1 unknown-id 500→404 (bounded), #2 status filter on `GET /invoices` (bounded feature), #3 `/summary` counts voided invoices (subtle spec violation), #4 `withRetry` never surfaces upstream 5xx errors (**trap** — obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status).
-- Implementation: [`lalanikarim/pi-agent#3`](https://github.com/lalanikarim/pi-agent/pull/3) — `poc-factory/{lib/intake.mjs, 01-intake-g0.mjs, README.md}`.
+- Implementation: this repo's [`poc/`](../poc/) — `poc/lib/intake.mjs`, `poc/01-intake-g0.mjs` (Phase 0); Phase 1 wiring (`poc/lib/factory.mjs`, `poc/lib/factory-worker.mjs`, `poc/lib/open-draft-pr.mjs`, `poc/02-orchestration-g1.mjs`) lands in the same PR.
+
+  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The Phase 0 files merged into PiDurable remain there as a harmless duplicate until cleaned up._
 
 **Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
 
