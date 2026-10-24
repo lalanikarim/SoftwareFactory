@@ -12,10 +12,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Harness, createRegistry, defineExtension } from "@earendil-works/pi-durable";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { auroraModels, auroraModelId } from "../PiDurable/poc/lib/aurora.mjs";
-import { loadDotEnv } from "../PiDurable/poc/lib/env.mjs";
+import { auroraModels, auroraModelId } from "../../../PiDurable/poc/lib/aurora.mjs";
+import { loadDotEnv } from "../../../PiDurable/poc/lib/env.mjs";
 import { factoryDelegateTool, factoryWorkerTask, sandboxRegistry } from "./factory-worker.mjs";
 import { openDraftPrTool } from "./open-draft-pr.mjs";
 
@@ -67,6 +68,7 @@ export async function startFactory({ port = 0, rootDir } = {}) {
   const ghToken = process.env.FACTORY_GITHUB_TOKEN ?? "";
 
   const registry = createRegistry();
+  registry.install(CodingTools); // read/write/edit/bash — the worker's role tools
   // The worker task definition MUST be registered for the scheduler to dispatch it.
   const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo });
   const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelId });

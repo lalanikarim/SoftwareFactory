@@ -17,7 +17,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../PiDurable/poc/lib/podman-sandbox.mjs";
+import { PodmanSandboxEnv } from "../../../PiDurable/poc/lib/podman-sandbox.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -110,6 +110,11 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const ws = await prepareWorkspace({ workDir, fixturesRepo, issueNumber, token });
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
+        // configure() needs tool REGISTRATION objects, not name strings.
+        const tools = runtime.registry
+          .installed()
+          .flatMap((e) => e.tools ?? [])
+          .filter((t) => ["read", "write", "edit", "bash"].includes(t.name));
         let convId;
         await runtime.commit(async (tx) => {
           const rec = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
@@ -118,7 +123,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
           await configure(tx, rec.id, {
             model: { provider: "aurora", modelId },
             thinkingLevel: "medium",
-            tools: ["read", "write", "edit", "bash"],
+            tools,
             instructions: "You are a software factory worker. Follow the working rules given in your task exactly.",
           });
           convId = rec.id;
