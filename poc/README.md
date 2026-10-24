@@ -40,7 +40,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 
 ## Design decisions (Phase 1)
 
-- **Stateless adapter, dedup at the durable server.** GitHub redeliveries carry new `X-GitHub-Delivery` ids but the same issue, so `requestId = "issue-<n>"` makes exactly-once hold at the durable server's `submit()` (crash-verified in `../PiDurable/poc/02-durable.mjs`). The adapter keeps a JSONL audit log for replayability.
+- **Stateless adapter, dedup at the durable server.** GitHub redeliveries carry new `X-GitHub-Delivery` ids but the same issue, so `requestId = "issue-<n>"` makes exactly-once hold at the durable server's `submit()` (crash-verified in `../engram/poc/02-durable.mjs`). The adapter keeps a JSONL audit log for replayability.
 - **Credentials stay on the host.** The sandbox gets no env vars and network=none. The clone is prepared host-side (token in the clone URL only during clone, then scrubbed from `.git/config`); the worker prompt forbids pushes; `open_draft_pr` does all GitHub writes from the host with stored `gh` auth or `FACTORY_GITHUB_TOKEN`.
 - **Deterministic issue flow.** The orchestrator never handles raw issue text — it reads only the trusted directive line (`Work on GitHub issue number: N`) and calls `delegate({issueNumber})`. The worker task fetches the issue itself via `gh api` and renders it inside `<untrusted>` in its prompt. This minimizes model judgment in the wiring; planning quality is exercised in Phases 2/5.
 - **Worker sandbox per run.** One Podman container per worker conversation (registry keyed by conversation id, routed via the harness `env()` callback), torn down when the task settles.

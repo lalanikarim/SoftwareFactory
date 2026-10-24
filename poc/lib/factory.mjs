@@ -15,8 +15,8 @@ import { Harness, createRegistry, defineExtension } from "@earendil-works/pi-dur
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { localModels, providerId, modelId } from "../../../PiDurable/poc/lib/model.mjs";
-import { loadDotEnv } from "../../../PiDurable/poc/lib/env.mjs";
+import { localModels, providerId, modelId } from "../../../engram/poc/lib/model.mjs";
+import { loadDotEnv } from "../../../engram/poc/lib/env.mjs";
 import { factoryDelegateTool, factoryWorkerTask, sandboxRegistry } from "./factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools } from "./factory-reviewer.mjs";
 import { openDraftPrTool } from "./open-draft-pr.mjs";
@@ -66,7 +66,7 @@ export async function startFactory({ port = 0, rootDir } = {}) {
   const workDir = join(base, "work");
 
   // Inference host/model come from config (PI_PROVIDER_ID / OPENAI_BASE_URL /
-  // OPENAI_API_KEY / PI_MODEL_ID) — see PiDurable poc/lib/model.mjs.
+  // OPENAI_API_KEY / PI_MODEL_ID) — see engram poc/lib/model.mjs.
   const modelRef = { provider: await providerId(), modelId: await modelId() };
   const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
   const ghToken = process.env.FACTORY_GITHUB_TOKEN ?? "";

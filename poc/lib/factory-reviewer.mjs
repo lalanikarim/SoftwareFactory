@@ -19,7 +19,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../../../PiDurable/poc/lib/podman-sandbox.mjs";
+import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
 import { sandboxRegistry } from "./factory-worker.mjs";
 
 const pExecFile = promisify(execFile);

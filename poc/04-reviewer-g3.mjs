@@ -26,7 +26,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Harness } from "@earendil-works/pi-durable";
-import { localModels, providerId, modelId } from "../../PiDurable/poc/lib/model.mjs";
+import { localModels, providerId, modelId } from "../../engram/poc/lib/model.mjs";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { sandboxRegistry } from "./lib/factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools, factoryReviewTool } from "./lib/factory-reviewer.mjs";
@@ -291,7 +291,8 @@ if (!skipChain) {
   if (!(await delivery.json()).accepted) throw new Error("intake rejected issue #4");
 
   // Wait until this run's worker AND reviewer tasks are terminal (or timeout).
-  const deadline = Date.now() + 25 * 60_000;
+  // 60 min: the 27B worker on trap issue #4 has taken up to ~30+ minutes.
+  const deadline = Date.now() + 60 * 60_000;
   let workerState = null, reviewerState = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 20_000));

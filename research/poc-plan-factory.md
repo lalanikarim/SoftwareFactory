@@ -42,7 +42,7 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
 - Fixture repo: [`lalanikarim/factory-fixture`](https://github.com/lalanikarim/factory-fixture) (private) — dependency-free Node ledger service, 17/17 tests passing. Seeded issues: #1 unknown-id 500→404 (bounded), #2 status filter on `GET /invoices` (bounded feature), #3 `/summary` counts voided invoices (subtle spec violation), #4 `withRetry` never surfaces upstream 5xx errors (**trap** — obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status).
 - Implementation: this repo's [`poc/`](../poc/) — `poc/lib/intake.mjs`, `poc/01-intake-g0.mjs` (Phase 0); Phase 1 wiring (`poc/lib/factory.mjs`, `poc/lib/factory-worker.mjs`, `poc/lib/open-draft-pr.mjs`, `poc/02-orchestration-g1.mjs`) lands in the same PR.
 
-  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The Phase 0 files merged into PiDurable remain there as a harmless duplicate until cleaned up._
+  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the `PiDurable` checkout and repo were renamed to `engram` — [`lalanikarim/engram`](https://github.com/lalanikarim/engram); all shared-lib imports in `poc/` now point at `../engram/poc/lib/`.)_
 
 **Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
 
@@ -136,9 +136,9 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 ### Reuse vs. build new
 
-| Reuse from `../PiDurable/poc` (as-is or near-as-is) | Build new |
+| Reuse from `../engram/poc` (as-is or near-as-is) | Build new |
 |---|---|
-| `lib/aurora.mjs` — local model provider wiring | `lib/github.mjs` — issue read, branch/commit/push, PR create, comment post tools |
+| `lib/model.mjs` — inference host/model wiring (env-driven; was `aurora.mjs`) | `lib/github.mjs` — issue read, branch/commit/push, PR create, comment post tools |
 | `lib/approvals.mjs` — durable approval hook + doc family | Reviewer role config + verdict schema (`structuredOutput`) |
 | `lib/podman-sandbox.mjs` — sandboxed ExecutionEnv | Evidence packager (diff + test output + transcript excerpts → PR body/comment) |
 | Subagent fan-out pattern (`03-subagents.mjs`, `lib/worker.mjs`) | Webhook/intake adapter (issue event → `submit({requestId: "issue-<n>"})`) |
@@ -233,7 +233,7 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 ### Backlog (tracked tasks)
 
-- ~~**Inference host / model agnostic wiring.**~~ **Done (2026-10-24).** Upstream: [pi-agent#17](https://github.com/lalanikarim/pi-agent/issues/17) resolved by PR #18 — `poc/lib/model.mjs` with env-driven config (`PI_PROVIDER_ID`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `PI_MODEL_ID`; defaults keep historical behavior). Local: `factory.mjs`, `factory-worker.mjs`, `factory-reviewer.mjs`, and the G3 battery now resolve provider/model via `localModels()`/`providerId()`/`modelId()` — no hardcoded provider ids remain in factory code. Switching inference host is now a `.env` change only; F2's cloud fallback and Phase 6 multi-model sizing are unblocked.
+- ~~**Inference host / model agnostic wiring.**~~ **Done (2026-10-24).** Upstream: [engram#17](https://github.com/lalanikarim/engram/issues/17) resolved by PR #18 — `poc/lib/model.mjs` with env-driven config (`PI_PROVIDER_ID`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `PI_MODEL_ID`; defaults keep historical behavior). Local: `factory.mjs`, `factory-worker.mjs`, `factory-reviewer.mjs`, and the G3 battery now resolve provider/model via `localModels()`/`providerId()`/`modelId()` — no hardcoded provider ids remain in factory code. Switching inference host is now a `.env` change only; F2's cloud fallback and Phase 6 multi-model sizing are unblocked.
 
 ## 7. Measurement plan
 
@@ -260,7 +260,7 @@ All data lives in committed state (transcripts, documents), so the measurement i
 | 5 | Feedback wiring + re-run | 0.5 day |
 | 6 | Metrics extraction + write-up | 0.5 day |
 
-**Total: ~5–7 focused days**, with roughly 70% of the plumbing already written in `../PiDurable/poc`. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave, which is tuning work, not building.
+**Total: ~5–7 focused days**, with roughly 70% of the plumbing already written in `../engram/poc`. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave, which is tuning work, not building.
 
 ## 9. Risks (PoC-relevant subset)
 
@@ -277,7 +277,7 @@ All data lives in committed state (transcripts, documents), so the measurement i
 
 | Existing artifact | Role in this PoC |
 |---|---|
-| `poc/lib/aurora.mjs` | Reused as-is (provider wiring + documented gotchas) |
+| `poc/lib/model.mjs` | Reused as-is (inference host/model wiring, env-driven; was `aurora.mjs`) |
 | `poc/lib/approvals.mjs` | Reused; extended with per-execution approval nonces (see §11) |
 | `poc/lib/podman-sandbox.mjs` | Reused as-is for worker env; reviewer gets a read-only variant |
 | `poc/lib/worker.mjs`, `03-subagents.mjs` | Pattern source for orchestrator + role fan-out |
