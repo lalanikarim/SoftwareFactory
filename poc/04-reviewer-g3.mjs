@@ -250,6 +250,12 @@ results.t2.passed = results.t2.verdict?.verdict === "pass";
 if (!skipChain) {
   console.log("\nT3: full chain on trap issue #4 (worker -> review -> gate)");
   const t0 = Date.now();
+  // Fresh runtime DB for this run. Interrupted prior runs leave waiting/pending
+  // tasks that stall the scheduler for tens of minutes, and stale transcripts
+  // make resumed orchestrator turns confused. G1/G2 evidence is recorded in
+  // data/*.json, so the runtime DB is disposable; with a fresh DB every task
+  // id belongs to this run.
+  rmSync(new URL("./data/factory.sqlite", import.meta.url).pathname, { force: true });
   const factory = await startFactory({ port: 9602 });
   const intakeLog = new URL(`./data/intake-g3-issue-4.jsonl`, import.meta.url).pathname;
   const { startIntakeServer } = await import("./lib/intake.mjs");
@@ -266,16 +272,8 @@ if (!skipChain) {
     },
   });
 
-  // factory.sqlite is shared across runs: baseline the task ids before delivery,
-  // then only consider issue-#4 tasks created after it.
-  const baseline = await factory.rootConversation().commit(
-    (tx) => Promise.all([
-      tx.scanTasks({ kind: "factory.worker" }, 200),
-      tx.scanTasks({ kind: "factory.reviewer" }, 200),
-    ]).then(([w, r]) => Math.max(0, ...[...w.items, ...r.items].map((t) => t.id))),
-    ctx,
-  );
-  const pick = (items) => items.find((t) => t.input?.issueNumber === 4 && t.id > baseline) ?? null;
+  // Fresh DB: every task belongs to this run, no baseline needed.
+  const pick = (items) => items.find((t) => t.input?.issueNumber === 4) ?? null;
 
   const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", ".title"]);
   const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", '.body // ""'])).trim();
