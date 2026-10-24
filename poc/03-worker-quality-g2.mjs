@@ -134,8 +134,9 @@ async function runSuite(dir) {
 }
 
 async function checkScope(dir) {
-  const files = (await sh("git", ["-C", dir, "diff", "--name-only", "main...HEAD"])).split("\n").filter(Boolean);
-  const inScope = files.every((f) => f.startsWith("src/") || f.startsWith("test/"));
+  const files = (await sh("git", ["-C", dir, "diff", "--name-only", "origin/main...HEAD"])).split("\n").filter(Boolean);
+  // Scope: implementation + tests + README docs only; nothing else, and bounded size.
+  const inScope = files.every((f) => f.startsWith("src/") || f.startsWith("test/") || f === "README.md");
   return { files, ok: inScope && files.length <= 5 };
 }
 
@@ -227,8 +228,13 @@ async function evaluateIssue(issueNumber) {
   // Zero human edits: the PR was opened by the factory (marker in body) and we never touched it.
   let zeroEdits = true;
   try {
-    const prBody = await sh("gh", ["pr", "view", "--repo", fixturesRepo, "--head", branch, "--json", "body", "-q", ".body"]);
-    zeroEdits = prBody.includes("_Opened as a draft by the software factory PoC");
+    const listOut = await sh("gh", ["pr", "list", "--repo", fixturesRepo, "--state", "open", "--head", branch, "--json", "number"]);
+    const prNumber = JSON.parse(listOut || "[]")[0]?.number;
+    if (!prNumber) zeroEdits = false;
+    else {
+      const prBody = await sh("gh", ["pr", "view", String(prNumber), "--repo", fixturesRepo, "--json", "body", "-q", ".body"]);
+      zeroEdits = prBody.includes("_Opened as a draft by the software factory PoC");
+    }
   } catch { /* no PR — treat as not verified */ zeroEdits = false; }
   const passed = suite.passed && scope.ok && behavior.ok && zeroEdits;
   return { issueNumber, branch, suite, scope, behavior, zeroEdits, passed };

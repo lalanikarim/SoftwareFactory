@@ -8,7 +8,7 @@ Implementation for [research/poc-plan-factory.md](../research/poc-plan-factory.m
 |---|---|---|
 | 0 — Fixture & intake wiring | G0: exactly-once intake under simulated retry; untrusted delimiting | **PASS** (`node 01-intake-g0.mjs`, 8/8 checks, no GPU needed) |
 | 1 — Intake & orchestration | G1: issue → draft PR unattended | wiring complete — `node 02-orchestration-g1.mjs` (needs Aurora + factory-sandbox image) |
-| 2 — Worker quality | G2: ≥ 2/3 bounded issues produce passing, scoped PRs | pending (needs Aurora / Qwen3.8-27B) |
+| 2 — Worker quality | G2: ≥ 2/3 bounded issues produce passing, scoped PRs | **PASS** — 3/3 (`node 03-worker-quality-g2.mjs`), zero human edits; see plan doc §1c |
 | 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | pending |
 | 4 — Evidence & human checkpoint | G4: exactly-once merge across crash | pending |
 | 5 — Feedback loop | G5: one verifiable "same mistake doesn't recur" | pending |
@@ -35,6 +35,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 | `lib/factory-worker.mjs` | `factory.worker` durable task: host-side issue fetch (`gh api`) + fresh clone on `agent/issue-<n>` + per-conversation Podman sandbox; deterministic worker prompt (issue text inside `<untrusted>`) |
 | `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite and records it in the PR body. Never merges — Phase 4 owns merging |
 | `02-orchestration-g1.mjs` | G1 end-to-end: preflight → factory + intake adapter → simulated webhook delivery → poll for draft PR (objective check) |
+| `03-worker-quality-g2.mjs` | G2 battery: run issues end-to-end (or evaluate existing draft PRs with `--allow-existing`) + objective checks (suite, diff scope, live-server behavior, zero human edits); results to `data/g2-results.json` |
 | `sandbox-image/Dockerfile` | Worker sandbox image: `node:24-alpine` + git. Build: `podman build -t factory-sandbox:latest poc/sandbox-image/` |
 
 ## Design decisions (Phase 1)
@@ -57,8 +58,9 @@ node 01-intake-g0.mjs                                # G0 battery (no GPU)
 node lib/factory.mjs 9600                            # standalone factory process
 node 02-orchestration-g1.mjs --issue 3               # G1 end-to-end (needs Aurora + image)
 node 02-orchestration-g1.mjs --issue 3 --request-id issue-3-dev-<ts>   # dev re-run after a failed attempt
+node 03-worker-quality-g2.mjs --issues 1,2,3 [--allow-existing]         # G2 battery (needs Aurora + image)
 ```
 
-## Next (Phase 2)
+## Next (Phase 3)
 
-Run all three bounded issues (#1, #2, #3) end-to-end and apply the objective G2 checks: suite passes on the branch, diff scoped to the issue, named behavior actually fixed. Acceptance rate ≥ 2/3 with zero human edits is the F2 decision number.
+Independent reviewer: reviewer subagent on its own read-only checkout emits a structured verdict. The negative test is the gate — it must return `fail` with the correct reason on the trap issue (#4) and `pass` on a known-good branch.
