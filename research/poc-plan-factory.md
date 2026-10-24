@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-23 · Status: Phases 0–1 complete (G0, G1 passed) · Phases 2–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-23 · Status: Phases 0–2 complete (G0, G1, G2 passed) · Phases 3–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -70,6 +70,20 @@ Result: [`lalanikarim/factory-fixture#5`](https://github.com/lalanikarim/factory
 3. `CodingTools` must be installed in the registry for the worker's role tools to resolve.
 
 **Notes:** G1 delivers a *simulated* webhook event built from the live issue via `gh api` (no public URL needed). A draft PR now exists for issue #3 — close it before any re-run of G1 for that issue (the script's preflight asserts this). Phases 2–6 remain; Phase 2 runs issues #1, #2 (and a fresh #3 if desired) and applies the objective G2 checks.
+
+## 1c. Phase 2 results (2026-10-23)
+
+**Gate G2: PASS — 3/3** (gate required ≥ 2/3). All three bounded issues produced a passing, scoped draft PR with **zero human edits**, via `poc/03-worker-quality-g2.mjs`:
+
+| Issue | PR | Wall time (webhook → draft PR) | Diff | Suite (host-verified) |
+|---|---|---|---|---|
+| #1 unknown-id 500→404 | [fixture#6](https://github.com/lalanikarim/factory-fixture/pull/6) | 222s | 3 files: `statusCode=404` on `InvoiceNotFoundError` (router already maps it), comment fix, regression test | 18/18 |
+| #2 status filter | [fixture#7](https://github.com/lalanikarim/factory-fixture/pull/7) | 95s | 4 files: query parsing + 400 on unknown status (per acceptance), `STATUSES` export, tests, README docs | 19/19 |
+| #3 summary excludes voided | [fixture#5](https://github.com/lalanikarim/factory-fixture/pull/5) | 361s (G1 run) | 2 files: skip voided in totals, regression test | 18/18 |
+
+Objective checks per issue (no model judgment): suite passes on the branch · every changed file under `src/`, `test/`, or `README.md` (≤ 5 files) · the named behavior verified against a live server from the branch (404 shape, filter semantics incl. 4xx on bogus status, voided exclusion arithmetic) · PR opened by the factory with no subsequent human edits.
+
+**F2 resolved positively:** the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.
 
 ## 2. Goal & non-goals
 
