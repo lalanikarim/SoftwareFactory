@@ -45,6 +45,12 @@ for (const f of readdirSync(new URL("./data", import.meta.url).pathname)) {
 }
 const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
 const skipChain = process.argv.includes("--skip-chain");
+// Deterministic intake requestIds (issue-<n>) make redeliveries exactly-once no-ops.
+// Pass --request-id <id> for a fresh dev re-run of the chain.
+const requestIdOverride = (() => {
+  const i = process.argv.indexOf("--request-id");
+  return i >= 0 ? process.argv[i + 1] : undefined;
+})();
 const results = { t1: null, t2: null, t3: null };
 
 // ---------------------------------------------------------------------------
@@ -253,12 +259,23 @@ if (!skipChain) {
       const res = await fetch(`http://127.0.0.1:${factory.port}/tasks`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requestId, content }),
+        body: JSON.stringify({ requestId: requestIdOverride ?? requestId, content }),
       });
       if (!res.ok) throw new Error(`factory /tasks returned ${res.status}`);
       return res.json();
     },
   });
+
+  // factory.sqlite is shared across runs: baseline the task ids before delivery,
+  // then only consider issue-#4 tasks created after it.
+  const baseline = await factory.rootConversation().commit(
+    (tx) => Promise.all([
+      tx.scanTasks({ kind: "factory.worker" }, 200),
+      tx.scanTasks({ kind: "factory.reviewer" }, 200),
+    ]).then(([w, r]) => Math.max(0, ...[...w.items, ...r.items].map((t) => t.id))),
+    ctx,
+  );
+  const pick = (items) => items.find((t) => t.input?.issueNumber === 4 && t.id > baseline) ?? null;
 
   const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", ".title"]);
   const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", '.body // ""'])).trim();
@@ -275,9 +292,7 @@ if (!skipChain) {
   });
   if (!(await delivery.json()).accepted) throw new Error("intake rejected issue #4");
 
-  // Wait until worker AND reviewer tasks are terminal (or timeout).
-  // factory.sqlite is shared across runs — filter for this run's issue #4 tasks.
-  const pick = (items) => items.find((t) => t.input?.issueNumber === 4) ?? null;
+  // Wait until this run's worker AND reviewer tasks are terminal (or timeout).
   const deadline = Date.now() + 25 * 60_000;
   let workerState = null, reviewerState = null;
   while (Date.now() < deadline) {
