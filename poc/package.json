@@ -1,0 +1,14 @@
+{
+  "name": "factory-poc",
+  "version": "0.1.0",
+  "description": "Software factory PoC: issue -> reviewed PR on Pi Durable. Phase 0: webhook intake adapter + exactly-once G0 gate.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "g0": "node 01-intake-g0.mjs"
+  }
+}
