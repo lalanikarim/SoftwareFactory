@@ -28,10 +28,13 @@ async function sh(cmd, args, opts = {}) {
   return stdout.trim();
 }
 
-/** taskId -> submitted verdict (written by submit_verdict, read in wait). */
+/** conversationId -> submitted verdict (written by submit_verdict, read in wait).
+ *  Keyed by conversation because api.taskId inside a tool call is the internal
+ *  pi.tool task, not the owning factory.reviewer task. */
 export const verdictRegistry = new Map();
-/** taskId -> PodmanSandboxEnv for run_tests. */
-const reviewerSandboxByTask = new Map();
+/** conversationId -> PodmanSandboxEnv for run_tests (api.taskId inside a tool call
+ *  is the internal pi.tool task, not the owning factory.reviewer task). */
+const reviewerSandboxByConv = new Map();
 
 /** Deterministic workspace path for a reviewed branch (shared by spawn + tools). */
 export function reviewWorkspace(workDir, branch) {
@@ -98,8 +101,8 @@ export function makeReviewerRoleTools({ workDir }) {
     parameters: Type.Object({}),
     replay: "safe", // deterministic given the fixed branch under review
     execute: async (_args, api, _ctx) => {
-      const sandbox = reviewerSandboxByTask.get(api.taskId);
-      if (!sandbox) throw new Error("no sandbox for this reviewer task");
+      const sandbox = reviewerSandboxByConv.get(api.conversationId);
+      if (!sandbox) throw new Error("no sandbox for this reviewer conversation");
       let out;
       try {
         const res = await sandbox.exec("node --test", { timeoutMs: 300_000 });
@@ -118,13 +121,16 @@ export function makeReviewerRoleTools({ workDir }) {
     description:
       'Submit the review verdict exactly once. verdict must be "pass" or "fail". evidence: concrete observations. concerns: for fail, what is wrong and why it misses the acceptance criteria; for pass, residual risks (may be empty).',
     parameters: Type.Object({
-      verdict: Type.Union(Type.Literal("pass"), Type.Literal("fail")),
+      // Plain string on purpose: this TypeBox build serializes 2-element
+      // unions into an invalid merged schema (llama-server rejects it).
+      verdict: Type.String({ description: 'Exactly "pass" or "fail"' }),
       evidence: Type.Array(Type.String()),
       concerns: Type.Array(Type.String()),
     }),
     replay: "unsafe", // captured in the task outcome
     execute: async (args, api) => {
-      verdictRegistry.set(api.taskId, { verdict: args.verdict, evidence: args.evidence, concerns: args.concerns });
+      if (args.verdict !== "pass" && args.verdict !== "fail") throw new Error(`verdict must be "pass" or "fail" (got ${JSON.stringify(args.verdict)})`);
+      verdictRegistry.set(api.conversationId, { verdict: args.verdict, evidence: args.evidence, concerns: args.concerns });
       return { output: [{ type: "text", text: `verdict recorded: ${args.verdict}` }] };
     },
   });
@@ -155,7 +161,6 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         const ws = await prepareReviewWorkspace({ workDir, fixturesRepo, branch });
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
-        reviewerSandboxByTask.set(task.id, sandbox);
         const tools = runtime.registry
           .installed()
           .flatMap((e) => e.tools ?? [])
@@ -173,6 +178,7 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
           convId = rec.id;
           return undefined;
         }, ctx);
+        reviewerSandboxByConv.set(convId, sandbox);
 
         await sandbox.init(ctx);
         const handle = await runtime.conversation(convId, ctx);
@@ -188,14 +194,14 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("reviewer conversation missing");
         await handle.waitForIdle(ctx);
+        reviewerSandboxByConv.delete(convId);
         const sandbox = sandboxRegistry.get(convId);
         if (sandbox) {
           await sandbox.cleanup(ctx);
           sandboxRegistry.delete(convId);
         }
-        reviewerSandboxByTask.delete(task.id);
-        const verdict = verdictRegistry.get(task.id);
-        verdictRegistry.delete(task.id);
+        const verdict = verdictRegistry.get(convId);
+        verdictRegistry.delete(convId);
         if (!verdict) {
           await runtime.commit(
             () => ({ status: "completing", outcome: { status: "failed", error: { message: "reviewer never called submit_verdict" } } }),
@@ -214,8 +220,10 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
             sandboxRegistry.delete(convId);
           }
         }
-        reviewerSandboxByTask.delete(task.id);
-        verdictRegistry.delete(task.id);
+        if (convId) {
+          reviewerSandboxByConv.delete(convId);
+          verdictRegistry.delete(convId);
+        }
         await runtime.commit(() => ({ status: "completing", outcome: { status: "aborted", reason: "reviewer aborted" } }), ctx);
       }),
     },
