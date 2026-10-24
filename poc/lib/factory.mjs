@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Harness, createRegistry, defineExtension } from "@earendil-works/pi-durable";
+import { Harness, configure, createRegistry, defineExtension } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -116,6 +116,19 @@ export async function startFactory({ port = 0, rootDir } = {}) {
       instructions: ORCHESTRATOR_INSTRUCTIONS,
     },
   });
+  // root() applies agent options only when it CREATES the conversation; a
+  // long-lived root keeps its original toolset/instructions across restarts.
+  // Re-apply on every start so tool/instruction updates reach it (idempotent).
+  await rootConv.commit(
+    (tx) =>
+      configure(tx, rootConv.id, {
+        model: modelRef,
+        thinkingLevel: "medium",
+        tools: [delegate, review, openDraftPr],
+        instructions: ORCHESTRATOR_INSTRUCTIONS,
+      }),
+    ctx,
+  );
 
   const server = http.createServer(async (req, res) => {
     try {
