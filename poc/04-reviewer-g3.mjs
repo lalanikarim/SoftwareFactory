@@ -16,7 +16,8 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFileSync } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -25,7 +26,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Harness } from "@earendil-works/pi-durable";
-import { auroraModels, auroraModelId } from "../../../PiDurable/poc/lib/aurora.mjs";
+import { auroraModels, auroraModelId } from "../../PiDurable/poc/lib/aurora.mjs";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { sandboxRegistry } from "./lib/factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools, factoryReviewTool } from "./lib/factory-reviewer.mjs";
@@ -38,6 +39,10 @@ async function sh(cmd, args, opts = {}) {
 
 const ctx = BACKGROUND_CONTEXT;
 loadFactoryDotEnv();
+// Per-run scratch state — start clean so re-runs are not deduped by exactly-once.
+for (const f of readdirSync(new URL("./data", import.meta.url).pathname)) {
+  if (f.startsWith("g3-reviewer-") && f.endsWith(".sqlite")) rmSync(new URL(`./data/${f}`, import.meta.url).pathname, { force: true });
+}
 const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
 const skipChain = process.argv.includes("--skip-chain");
 const results = { t1: null, t2: null, t3: null };
@@ -241,7 +246,8 @@ if (!skipChain) {
   const t0 = Date.now();
   const factory = await startFactory({ port: 9602 });
   const intakeLog = new URL(`./data/intake-g3-issue-4.jsonl`, import.meta.url).pathname;
-  const { server: intake, port: intakePort } = (await import("./lib/intake.mjs")).startIntakeServer({
+  const { startIntakeServer } = await import("./lib/intake.mjs");
+  const { server: intake, port: intakePort } = await startIntakeServer({
     logPath: intakeLog,
     dispatch: async ({ requestId, content }) => {
       const res = await fetch(`http://127.0.0.1:${factory.port}/tasks`, {
