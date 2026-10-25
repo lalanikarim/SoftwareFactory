@@ -48,7 +48,9 @@ One validated JSON file per managed repo (factory-side, not in the target repo),
 
 ### 3.2 Webhook adapter routing (per-repo secrets)
 
-Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs`, G0 13/13):
+*Status: implemented — `poc/lib/adapter.mjs` + routes mode in `poc/lib/intake.mjs`; G0 extended to 18/18 with M3 cross-repo rejection checks.*
+
+Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs`):
 
 - Adapter holds a **`repo full_name → { secret, /tasks target }` map** (from its own config), one entry per managed repo.
 - Verification stays **pre-parse**: the raw body is HMAC-checked against each configured secret in constant time; the matching secret identifies both authenticity *and* routing — signature validity doubles as per-repo authorization. An event signed with repo A's secret but naming repo B is rejected (403 + audit line), so a leaked per-repo secret cannot forge submissions into another factory.
