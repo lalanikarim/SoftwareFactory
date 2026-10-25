@@ -203,7 +203,71 @@ try {
     sServer.close();
   }
 
-  console.log(`\nG0 PASS — ${passed}/13 checks (exactly-once intake under simulated retry; untrusted delimiting + webhook signature verification)`);
+  // 13-17. Multi-repo routing (plan §3.2 / gate M3): per-repo secrets, pre-parse
+  //        verification, and cross-repo naming rejection.
+  const SECRET_A = "g0-test-secret-A";
+  const SECRET_B = "g0-test-secret-B";
+  const REPO_A = "lalanikarim/factory-fixture";
+  const REPO_B = "lalanikarim/other-repo";
+  const routedTo = [];
+  const routesServer = await startIntakeServer({
+    dispatch: async (repo, event) => { routedTo.push({ repo, number: event.issue.number }); },
+    logPath: join(tmp, "intake-routes-log.jsonl"),
+    routes: [
+      { repo: REPO_A, secret: SECRET_A },
+      { repo: REPO_B, secret: SECRET_B },
+    ],
+  });
+
+  try {
+    const signA = (body) => `sha256=${createHmac("sha256", SECRET_A).update(body).digest("hex")}`;
+    const signB = (body) => `sha256=${createHmac("sha256", SECRET_B).update(body).digest("hex")}`;
+    const eventFor = (repo, number) => ({ ...issueEvent({ number, title: "routed", body: "ok", labels: ["agent"] }), repository: { full_name: repo } });
+
+    // 13. Valid signature for repo A -> routed to A only.
+    const evA = eventFor(REPO_A, 21);
+    const rawA = JSON.stringify(evA);
+    const rA = await post(routesServer.port, evA, { signature: signA(rawA) });
+    assert.equal(rA.status, 202);
+    assert.equal(rA.body.routedTo, REPO_A);
+    assert.deepEqual(routedTo, [{ repo: REPO_A, number: 21 }]);
+    ok("valid signature routes to the owning factory (repo A)");
+
+    // 14. Valid signature for repo B -> routed to B only.
+    const evB = eventFor(REPO_B, 22);
+    const rawB = JSON.stringify(evB);
+    const rB = await post(routesServer.port, evB, { signature: signB(rawB) });
+    assert.equal(rB.status, 202);
+    assert.equal(rB.body.routedTo, REPO_B);
+    assert.deepEqual(routedTo.at(-1), { repo: REPO_B, number: 22 });
+    ok("valid signature routes to the owning factory (repo B)");
+
+    // 15. M3 cross-repo rejection: event signed with A's secret but naming B.
+    const evCross = eventFor(REPO_B, 23);
+    const rawCross = JSON.stringify(evCross);
+    const rCross = await post(routesServer.port, evCross, { signature: signA(rawCross) });
+    assert.equal(rCross.status, 403);
+    assert.equal(routedTo.length, 2, "cross-repo event must not route anywhere");
+    ok("event signed for repo A but naming repo B is rejected 403 (M3)");
+
+    // 16. Unknown secret in routes mode -> 403; missing signature -> 403.
+    const rUnknown = await post(routesServer.port, evA, { signature: `sha256=${createHmac("sha256", "not-a-configured-secret").update(rawA).digest("hex")}` });
+    assert.equal(rUnknown.status, 403);
+    const rUnsigned = await post(routesServer.port, evA);
+    assert.equal(rUnsigned.status, 403);
+    assert.equal(routedTo.length, 2, "unauthenticated requests must not route");
+    ok("unknown or missing signature in routes mode is rejected 403 before routing");
+
+    // 17. Non-loopback bind without routes/secret refuses; with routes it is allowed.
+    assert.throws(() => startIntakeServer({ host: "0.0.0.0", dispatch: async () => {} }), /webhook secret|routes/);
+    const wide = await startIntakeServer({ host: "0.0.0.0", routes: [{ repo: REPO_A, secret: SECRET_A }], dispatch: async () => {}, port: 0 });
+    wide.server.close();
+    ok("reachable bind requires per-repo secrets (routes) — refused otherwise");
+  } finally {
+    routesServer.server.close();
+  }
+
+  console.log(`\nG0 PASS — ${passed}/18 checks (exactly-once intake under simulated retry; untrusted delimiting + webhook signature verification + multi-repo routing/M3)`);
 } finally {
   server.close();
 }

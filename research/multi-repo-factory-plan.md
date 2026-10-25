@@ -26,6 +26,8 @@ _Companions: [`poc-plan-factory.md`](poc-plan-factory.md) (completed PoC, G0–G
 
 ### 3.1 Per-repo config file
 
+*Status: implemented — `poc/lib/factory-config.mjs` + `poc/config/`, with legacy env fallback during transition.*
+
 One validated JSON file per managed repo (factory-side, not in the target repo), e.g. `poc/config/<repo>.json`:
 
 ```json
@@ -46,7 +48,9 @@ One validated JSON file per managed repo (factory-side, not in the target repo),
 
 ### 3.2 Webhook adapter routing (per-repo secrets)
 
-Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs`, G0 13/13):
+*Status: implemented — `poc/lib/adapter.mjs` + routes mode in `poc/lib/intake.mjs`; G0 extended to 18/18 with M3 cross-repo rejection checks.*
+
+Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs`):
 
 - Adapter holds a **`repo full_name → { secret, /tasks target }` map** (from its own config), one entry per managed repo.
 - Verification stays **pre-parse**: the raw body is HMAC-checked against each configured secret in constant time; the matching secret identifies both authenticity *and* routing — signature validity doubles as per-repo authorization. An event signed with repo A's secret but naming repo B is rejected (403 + audit line), so a leaked per-repo secret cannot forge submissions into another factory.
@@ -55,15 +59,19 @@ Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs
 
 ### 3.3 Process model & supervision
 
+*Status: implemented — `poc/supervise.mjs` (fleet file, restart-on-fault, status table); examples in `poc/fleet.example.json` / `poc/routes.example.json`.*
+
 - **One factory process per repo** — the existing `lib/factory.mjs` needs no core changes; each instance gets its own port, sqlite db, lessons file, and config from §3.1.
 - Supervision via compose/systemd: one unit per factory + one adapter unit; restart-on-fault (the durable harness already recovers in-process state from its db — crash-durability is the PoC's core property).
 - **Status aggregation**: a small read-only script/endpoint that fans out to each factory's `/health`, `/approvals`, and `/tool-results` and prints one table: repo, current issue, state (working / awaiting approval / stuck), wall time so far. This is the operator dashboard for Target 1.
 
 ### 3.4 Shared-resource governance (the one new design problem)
 
+*Status: implemented — `awaitIdleWithinBudget` in `poc/lib/factory-worker.mjs`, enforced in both worker and reviewer wait phases from `budgets.wallSecsPerIssue`; live-verified with a 5s budget (clean abort, partial branch preserved, no PR opened).*
+
 All factories share one inference endpoint (Aurora/llama-server on the RTX 4090). Today there is no queueing or budgeting anywhere; a trap issue on repo A (issue #4 showed ~30 min of dead-ends in dev runs) would silently starve B and C.
 
-- **Per-issue wall-clock budget** (`budgets.wallSecsPerIssue`): enforced host-side — the factory aborts the run, leaves the partial branch for the stale-branch rework path, and records the overrun in its audit log. This bounds worst-case starvation per issue.
+- **Per-issue wall-clock budget** (`budgets.wallSecsPerIssue`): enforced host-side in the worker's and reviewer's wait phases — on overrun the conversation is aborted cleanly (`ConversationHandle.abort`), the sandbox is torn down, the partial branch stays on disk for the stale-branch rework path, and the overrun is recorded in the task outcome (surfaced to the orchestrator as a `delegate` error) plus an audit log line. This bounds worst-case starvation per issue.
 - **Per-factory concurrency stays 1** (already true: one root conversation processes submissions sequentially). With N factories, total concurrent GPU demand is bounded by N; admission control beyond that is out of scope for the pilot.
 - **Honest limit:** budgets cap the damage; they are not fair-share scheduling. If measured contention becomes a problem (Phase 6 instrumentation already extracts per-run tokens/wall time — extend `07-measurement.mjs` to aggregate across factories), revisit with a real queue.
 
@@ -74,7 +82,9 @@ All factories share one inference endpoint (Aurora/llama-server on the RTX 4090)
 
 ### 3.6 Sandbox images & dependency install
 
-Default strategy: **ephemeral setup phase** — the container starts with network, runs the host-defined `setupCommand` (e.g. `npm ci`), then the network is cut before any agent turn. The setup command comes from factory-side config, never from repo content. Optimization (later): per-repo prebuilt images with deps baked in, restoring absolute `network=none`.
+*Status: implemented — `poc/lib/setup-sandbox.mjs`, wired into both worker and reviewer spawn phases.*
+
+Default strategy: **ephemeral setup phase** — a one-shot disposable container runs the host-defined `setupCommand` (e.g. `npm ci`) with egress, then exits; the long-lived agent sandbox is created sealed (`network=none`). Dependency state persists via the host-mounted workspace volume, so the agent never runs in a networked container and the setup command comes from factory-side config, never repo content. Runs are idempotent (re-run on task resume) and fail closed before the agent conversation starts. Optimization (later): per-repo prebuilt images with deps baked in.
 
 ### 3.7 Gates & acceptance criteria
 
@@ -131,7 +141,7 @@ Run the Target 1 pilot and **count Journey D**: how often does a human have to m
 
 | # | Decision | Default in this spec |
 |---|---|---|
-| D1 | Test command: factory-side config (B) vs repo-declared `factory.yaml` (C) — C is only safe if **all** test execution moves into sandboxes (incl. the host-side PR verification, which today runs on the host) | B for the pilot; revisit C with sandboxed host-verification after M1 |
+| D1 | Test command: factory-side config (B) vs repo-declared `factory.yaml` (C) — C is only safe if **all** test execution moves into sandboxes (incl. the host-side PR verification, which today runs on the host) | **Resolved 2026-10-25: B adopted and implemented** (`poc/lib/factory-config.mjs`, argv-only command validation). Revisit C with sandboxed host-verification after M1 |
 | D2 | Per-repo token provisioning (who issues/rotates) | Operator-managed in config; secret manager integration later |
 | D3 | Pilot repo pair (prefer similar stacks to de-risk images) | TBD at implementation start |
 | D4 | Second fixture repo for G6 | Only if Target 2 is funded per §4.4 |

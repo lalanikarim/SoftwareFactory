@@ -20,7 +20,8 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
-import { sandboxRegistry } from "./factory-worker.mjs";
+import { runSetupInContainer } from "./setup-sandbox.mjs";
+import { sandboxRegistry, awaitIdleWithinBudget } from "./factory-worker.mjs";
 
 const pExecFile = promisify(execFile);
 async function sh(cmd, args, opts = {}) {
@@ -91,7 +92,7 @@ function reviewerPrompt({ branch, issueNumber, issueText }) {
 }
 
 /** The reviewer role's custom tools (created once, registered at install time). */
-export function makeReviewerRoleTools({ workDir }) {
+export function makeReviewerRoleTools({ workDir, testCommand = "node --test" }) {
   const gitDiff = defineTool({
     name: "git_diff",
     description: "Show the candidate branch's diff against main: stat + full diff (truncated to ~8KB) and the list of changed files.",
@@ -109,7 +110,7 @@ export function makeReviewerRoleTools({ workDir }) {
 
   const runTests = defineTool({
     name: "run_tests",
-    description: "Run the test suite (`node --test`) inside the sandboxed checkout. Returns pass/fail counts and the output tail.",
+    description: `Run the repository's test suite (\`${testCommand}\`) inside the sandboxed checkout. Returns pass/fail counts and the output tail.`,
     parameters: Type.Object({}),
     replay: "safe", // deterministic given the fixed branch under review
     execute: async (_args, api, _ctx) => {
@@ -120,7 +121,7 @@ export function makeReviewerRoleTools({ workDir }) {
       try {
         // exec streams output via onOutput (the result carries only exitCode);
         // timeout is in SECONDS per the ExecutionEnv contract.
-        res = await sandbox.exec("node --test", { timeout: 300, onOutput: (t) => (out += t) });
+        res = await sandbox.exec(testCommand, { timeout: 300, onOutput: (t) => (out += t) });
       } catch (e) {
         res = { ok: false, error: { message: String(e.message) } };
       }
@@ -153,7 +154,7 @@ export function makeReviewerRoleTools({ workDir }) {
   return [gitDiff, runTests, submitVerdict];
 }
 
-export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest" }) {
+export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", setupCommand = null, wallSecsPerIssue = 900 }) {
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
       return await fn(task, runtime, ctx);
@@ -174,6 +175,12 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         // Host-side prep (deterministic).
         const issueText = await fetchIssue(fixturesRepo, issueNumber);
         const ws = await prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumber });
+
+        // Setup phase (§3.6): the reviewer's sealed sandbox needs the same
+        // dependency install before it can run tests.
+        if (setupCommand) {
+          await runSetupInContainer({ workspace: ws, image, setupCommand });
+        }
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
         const tools = runtime.registry
@@ -208,7 +215,26 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         const convId = task.state.checkpoint.convId;
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("reviewer conversation missing");
-        await handle.waitForIdle(ctx);
+
+        // M4: same host-side wall-clock budget as the worker — a stuck review
+        // must not hold the factory's single concurrency slot forever.
+        const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
+        if (waitResult === "overrun") {
+          console.error(`[factory.reviewer] BUDGET: review of issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting review`);
+          try { await handle.abort(ctx); } catch (e) { console.error(`[factory.reviewer] budget abort: ${e.message}`); }
+          reviewerSandboxByConv.delete(convId);
+          const sandbox = sandboxRegistry.get(convId);
+          if (sandbox) {
+            await sandbox.cleanup(ctx);
+            sandboxRegistry.delete(convId);
+          }
+          await runtime.commit(
+            () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
+            ctx,
+          );
+          return;
+        }
+
         reviewerSandboxByConv.delete(convId);
         const sandbox = sandboxRegistry.get(convId);
         if (sandbox) {

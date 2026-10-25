@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
+import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { readLessons } from "./lessons.mjs";
 
 const pExecFile = promisify(execFile);
@@ -54,7 +55,7 @@ async function prepareWorkspace({ workDir, fixturesRepo, issueNumber, token }) {
   return ws;
 }
 
-function workerPrompt({ issueNumber, issueText, lessons = "" }) {
+function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "node --test" }) {
   const branch = `agent/issue-${issueNumber}`;
   return [
     `You are a software factory worker. The repository is checked out in /sandbox (your working directory), already on branch ${branch}.`,
@@ -79,7 +80,7 @@ function workerPrompt({ issueNumber, issueText, lessons = "" }) {
     `- Stay on branch ${branch}. Do not create other branches, do not push, and do not use any git remote commands.`,
     "- Implement the smallest change that satisfies the issue and its acceptance criteria. Follow the behavior spec in README.md where relevant.",
     "- Add or update tests in test/ covering the new behavior (node:test style, matching the existing suites).",
-    "- Run the full suite with `node --test` — it must pass before you finish.",
+    `- Run the full suite with \`${testCommand}\` — it must pass before you finish.`,
     '- Commit all changes: `git add` only the files you changed, then `git commit -m "<clear message>"`.',
     '- Final answer: one line "COMMITTED <short-sha>: <one-line summary>", then the last lines of the test run output. If you could not complete the work, say exactly what is blocking you instead.',
   ].join("\n");
@@ -93,7 +94,22 @@ async function cleanupSandbox(convId, ctx) {
   }
 }
 
-export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest" }) {
+/**
+ * Wait for a conversation to go idle, bounded by a wall-clock budget (M4).
+ * Returns "idle" or "overrun" — the caller decides how to abort.
+ */
+export async function awaitIdleWithinBudget(handle, ctx, budgetSecs) {
+  const deadline = Date.now() + budgetSecs * 1000;
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve("overrun"), Math.max(0, deadline - Date.now())); });
+  try {
+    return await Promise.race([handle.waitForIdle(ctx).then(() => "idle"), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null, wallSecsPerIssue = 1800 }) {
   // TEMP(debug): log full stacks for phase faults while G1 is being brought up.
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
@@ -120,6 +136,12 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const lessons = readLessons();
         const ws = await prepareWorkspace({ workDir, fixturesRepo, issueNumber, token });
 
+        // Setup phase (§3.6): dependency installs run in a one-shot
+        // networked container; the agent's own sandbox is then sealed.
+        if (setupCommand) {
+          await runSetupInContainer({ workspace: ws, image, setupCommand });
+        }
+
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
         // configure() needs tool REGISTRATION objects, not name strings.
         const tools = runtime.registry
@@ -145,7 +167,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("worker conversation missing");
         await handle.submit(
-          { type: "input", content: workerPrompt({ issueNumber, issueText, lessons }), requestId: `worker-${task.id}` },
+          { type: "input", content: workerPrompt({ issueNumber, issueText, lessons, testCommand }), requestId: `worker-${task.id}` },
           ctx,
         );
         await runtime.commit(() => ({ status: "running", checkpoint: { phase: "wait", convId } }), ctx);
@@ -154,7 +176,22 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const convId = task.state.checkpoint.convId;
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("worker conversation missing");
-        await handle.waitForIdle(ctx);
+
+        // M4: host-side wall-clock budget. The partial branch stays on disk
+        // for the stale-branch rework path; the overrun is recorded in the
+        // task outcome and the audit log.
+        const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
+        if (waitResult === "overrun") {
+          console.error(`[factory.worker] BUDGET: issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting run; partial branch preserved`);
+          try { await handle.abort(ctx); } catch (e) { console.error(`[factory.worker] budget abort: ${e.message}`); }
+          await cleanupSandbox(convId, ctx);
+          await runtime.commit(
+            () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
+            ctx,
+          );
+          return;
+        }
+
         let answer = "";
         const view = await runtime.context(convId, ctx);
         for (const m of [...view.messages].reverse()) {
@@ -208,7 +245,7 @@ export function factoryDelegateTool({ taskDef, modelRef }) {
           {
             type: "text",
             text: JSON.stringify(
-              outcome.status === "completed" ? { report: outcome.result.answer } : { error: outcome.error?.message ?? outcome.status },
+              outcome.status === "completed" ? { report: outcome.result.answer } : { error: outcome.error?.message ?? outcome.reason ?? outcome.status },
             ),
           },
         ],
