@@ -46,7 +46,9 @@ async function prepareWorkspace({ workDir, fixturesRepo, issueNumber, token }) {
   const authUrl = token
     ? `https://x-access-token:${token}@github.com/${fixturesRepo}.git`
     : `https://github.com/${fixturesRepo}.git`;
-  await sh("git", ["clone", "--quiet", authUrl, ws]);
+  // --recurse-submodules: managed repos may pin shared libs as submodules
+  // (no-op for repos without .gitmodules).
+  await sh("git", ["clone", "--quiet", "--recurse-submodules", authUrl, ws]);
   // Scrub the credential from the stored remote URL; the worker never pushes.
   await sh("git", ["-C", ws, "remote", "set-url", "origin", `https://github.com/${fixturesRepo}.git`]);
   await sh("git", ["-C", ws, "config", "user.name", process.env.FACTORY_GIT_NAME ?? "factory-worker"]);
