@@ -50,13 +50,18 @@ async function fetchIssue(fixturesRepo, issueNumber) {
 async function prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumber }) {
   const ws = reviewWorkspace(workDir, branch);
   rmSync(ws, { recursive: true, force: true });
+  // Prefer the worker's local checkout: in the closed loop review runs BEFORE
+  // the push, and on rework the remote branch still holds the stale prior tip.
+  // Fall back to the remote for branches that only exist there (e.g. seeded
+  // negative-test branches).
+  const local = join(workDir, `issue-${issueNumber}`);
   try {
-    await sh("git", ["clone", "--quiet", "--branch", branch, `https://github.com/${fixturesRepo}.git`, ws]);
-  } catch {
-    // Branch not yet pushed (closed loop: review runs BEFORE the push).
-    // Clone locally from the worker's checkout — same commit, no remote write.
-    const local = join(workDir, `issue-${issueNumber}`);
     await sh("git", ["clone", "--quiet", "--branch", branch, local, ws]);
+  } catch {
+    const authUrl = process.env.FACTORY_GITHUB_TOKEN
+      ? `https://x-access-token:${process.env.FACTORY_GITHUB_TOKEN}@github.com/${fixturesRepo}.git`
+      : `https://github.com/${fixturesRepo}.git`;
+    await sh("git", ["clone", "--quiet", "--branch", branch, authUrl, ws]);
   }
   return ws;
 }

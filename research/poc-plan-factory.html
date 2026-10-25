@@ -148,8 +148,8 @@
     <h1>Software Factory PoC Plan</h1>
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
-      <span class="chip">Date <b>2026-10-24</b></span>
-      <span class="chip">Status <b>Phases 0–3 complete · G0, G1, G2, G3 passed</b></span>
+      <span class="chip">Date <b>2026-10-25</b></span>
+      <span class="chip">Status <b>Phases 0–4 complete · G0, G1, G2, G3, G4 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -162,6 +162,8 @@
     <a href="#phase0-results">Phase 0 results</a>
     <a href="#phase1-results">Phase 1 results</a>
     <a href="#phase2-results">Phase 2 results</a>
+    <a href="#phase3-results">Phase 3 results</a>
+    <a href="#phase4-results">Phase 4 results</a>
     <a href="#goal">Goal</a>
     <a href="#assumptions">Assumptions</a>
     <a href="#architecture">Architecture</a>
@@ -284,8 +286,36 @@
   <p><strong>F2 resolved positively:</strong> the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.</p>
 </section>
 
-<!-- 1d. PHASE 3 RESULTS -->
-<section id="phase3-results">
+<!-- 1e. PHASE 4 RESULTS -->
+<section id="phase4-results">
+  <h2><span class="num">1e</span> Phase 4 results (2026-10-25)</h2>
+
+  <div class="callout ok">
+    <b class="label">Gate G4: PASS — evidence complete on the PR; exactly-once merge across a mid-approval SIGKILL</b>
+    Battery <code>poc/05-merge-gate-g4.mjs</code> (results in <code>poc/data/g4-results.json</code>). The battery runs the factory as a <strong>child process</strong> and acts as the human driver over HTTP — <code>GET /approvals</code> reads pending keys from the transcript, <code>POST /approvals</code> records the durable decision (standing in for Telegram inline buttons; same durable-decision mechanism as the engram PoC's approval hook).
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Flow</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>T1 happy path</td><td>Issue #2 (stale branch): work directive → rework on current main → review gate → evidence refresh on <a href="https://github.com/lalanikarim/factory-fixture/pull/7">PR #7</a> → <code>merge_pr</code> blocks → approve → retry → merge</td><td><strong>PASS</strong> in 143s — exactly one merge commit + the head commit landed on main; approval record consumed</td></tr>
+        <tr><td>T2 crash</td><td>Issue #11 (fresh fixture issue): full chain → new <a href="https://github.com/lalanikarim/factory-fixture/pull/12">PR #12</a> → <code>merge_pr</code> blocks → <strong>SIGKILL while approval pending</strong> → restart over the same db → pending key survives → approve → retry → merge</td><td><strong>PASS</strong> in 144s — exactly one merge commit; no lost or duplicated merge state</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Merge gate design (plan §11 resolved).</strong> Approvals are <strong>single-use durable records</strong>: <code>merge_pr</code> returns <code>REQUIRES APPROVAL</code> with a stable key (<code>sha1(tool + canonical args)</code>); only the factory's <code>/approvals</code> endpoint writes the decision, so the agent can never self-approve. pi-durable hooks are read-only, so consumption happens <em>inside the tool</em>: an atomic <code>api.commit</code> reads the record and marks it consumed in one commit before any side effect. Any further identical call requires fresh approval. Crash ordering is safe under every interleaving: if we crash after consuming but before the merge lands, the tool's PR-state check makes a re-approved rerun a no-op (<code>alreadyMerged</code>) — exactly-once holds because a second <code>gh pr merge</code> on a merged PR cannot create another merge commit.</p>
+
+  <p><strong>Evidence packager (G4 "evidence complete").</strong> <code>open_draft_pr</code> now assembles the full PR body from host-verified facts: diff summary (<code>git diff --stat</code> vs merge-base), the reviewer's complete verdict (all evidence + concerns), host-verified test counts, and the worker's final report pulled from the orchestrator transcript — and <strong>refreshes</strong> the body on existing PRs, so evidence is complete even for PRs that predate the packager.</p>
+
+  <p><strong>Findings recorded during the gate:</strong> (1) GitHub refuses to merge draft PRs — <code>merge_pr</code> converts draft → ready (<code>gh pr ready</code>) as part of the approved merge action (approval implies review is done); (2) deleting a remote branch auto-closes the open PR tracking it — the stale-branch retry path now uses <code>--force-with-lease</code> on our own factory-owned <code>agent/issue-*</code> branch instead of delete + re-push, preserving PR continuity (shared branches are still never touched); (3) stale branches conflict with main (<code>mergeStateStatus=DIRTY</code>) — <code>merge_pr</code> detects this and returns a rework directive instead of attempting a merge; the battery's <code>G4_MODE=work</code> exercises the full rework chain (worker re-implements on current main → force-with-lease update → review → merge); (4) new fixture issue #11 (<code>POST /invoices</code> 500→400 on invalid bodies) was seeded and resolved through the factory, leaving a fresh bounded issue trail for Phase 5's feedback-loop re-run.</p>
+
+  <p><strong>F4 resolved positively:</strong> the merge approval gate executes the merge exactly once across a mid-approval SIGKILL, with real git side effects on a real repo.</p>
+</section>
+
+<!-- 2. GOAL -->
+<section id="goal">
   <h2><span class="num">1d</span> Phase 3 results (2026-10-24)</h2>
 
   <div class="callout ok">
@@ -441,7 +471,7 @@
   </div>
 
   <div class="phase">
-    <div class="p-head"><span class="p-num">4</span><h3>Evidence &amp; human checkpoint</h3></div>
+    <div class="p-head"><span class="p-num">4</span><h3>Evidence &amp; human checkpoint <em style="color:var(--ok)">✅ G4 PASS 2026-10-25 — see §1e</em></h3></div>
     <ul>
       <li><strong>Evidence packager:</strong> on reviewer pass, assemble the PR description (diff summary, test output, transcript excerpts, reviewer verdict). Verify all sections present.</li>
       <li><strong>Merge gate:</strong> <code>gh pr merge</code> tool is approval-gated; approve via Telegram inline button → merge executes.</li>

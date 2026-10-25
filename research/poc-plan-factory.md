@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-24 · Status: Phases 0–3 complete (G0, G1, G2, G3 passed) · Phases 4–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-25 · Status: Phases 0–4 complete (G0, G1, G2, G3, G4 passed) · Phases 5–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -98,6 +98,23 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 **Key design outcome — the gate owns its evidence.** Early runs showed the 27B orchestrator reliably *skips* an optional `review` tool step (it went straight to `open_draft_pr`, and even a refusal message didn't make it retry with review). The fix is structural, not prompt-based: **`open_draft_pr` itself runs the independent reviewer on the committed branch before pushing** and refuses (returning the findings) if the verdict isn't `pass`. The orchestrator's flow collapses to `delegate → open_draft_pr`; review can no longer be skipped because it *is* the merge gate. This mirrors real CI: the check runs at the gate, not as an optional agent step.
 
 **Other findings recorded:** (1) pi-durable `PodmanSandboxEnv.exec` timeout unit bug — filed upstream as [engram#14](https://github.com/lalanikarim/engram/issues/14), fixed by PR #15; (2) interrupted factory runs leave stuck tasks that stall the scheduler for tens of minutes — G3 T3 now starts from a fresh `factory.sqlite` each run; (3) the 27B worker on trap issue #4 needs up to ~30 min end-to-end (vs ~7 min on simpler issues) — it explores, dead-ends, and recovers; T3 timeout is 60 min.
+
+## 1e. Phase 4 results (2026-10-25)
+
+**Gate G4: PASS** — evidence complete on the PR; exactly-once merge across a mid-approval SIGKILL (`poc/05-merge-gate-g4.mjs`; results in `poc/data/g4-results.json`). The battery runs the factory as a **child process** and acts as the human driver over HTTP — `GET /approvals` reads pending keys from the transcript, `POST /approvals` records the durable decision (standing in for Telegram inline buttons; same durable-decision mechanism as the engram PoC's approval hook).
+
+| Test | Flow | Result |
+|---|---|---|
+| T1 happy path | Issue #2 (stale branch): work directive → rework on current main → review gate → evidence refresh on [PR #7](https://github.com/lalanikarim/factory-fixture/pull/7) → `merge_pr` blocks → approve → retry → merge | **PASS** in 143s — exactly one merge commit + the head commit landed on main; approval record consumed |
+| T2 crash | Issue #11 (fresh fixture issue): full chain → new [PR #12](https://github.com/lalanikarim/factory-fixture/pull/12) → `merge_pr` blocks → **SIGKILL while approval pending** → restart over the same db → pending key survives → approve → retry → merge | **PASS** in 144s — exactly one merge commit; no lost or duplicated merge state |
+
+**Merge gate design (plan §11 resolved).** Approvals are **single-use durable records**: `merge_pr` returns `REQUIRES APPROVAL` with a stable key (`sha1(tool + canonical args)`); only the factory's `/approvals` endpoint writes the decision, so the agent can never self-approve. pi-durable hooks are read-only, so consumption happens *inside the tool*: an atomic `api.commit` reads the record and marks it consumed in one commit before any side effect. Any further identical call requires fresh approval. Crash ordering is safe under every interleaving: if we crash after consuming but before the merge lands, the tool's PR-state check makes a re-approved rerun a no-op (`alreadyMerged`) — exactly-once holds because a second `gh pr merge` on a merged PR cannot create another merge commit.
+
+**Evidence packager (G4 "evidence complete").** `open_draft_pr` now assembles the full PR body from host-verified facts: diff summary (`git diff --stat` vs merge-base), the reviewer's complete verdict (all evidence + concerns), host-verified test counts, and the worker's final report pulled from the orchestrator transcript — and **refreshes** the body on existing PRs, so evidence is complete even for PRs that predate the packager.
+
+**Findings recorded during the gate:** (1) GitHub refuses to merge draft PRs — `merge_pr` converts draft → ready (`gh pr ready`) as part of the approved merge action (approval implies review is done); (2) deleting a remote branch auto-closes the open PR tracking it — the stale-branch retry path now uses `--force-with-lease` on our own factory-owned `agent/issue-*` branch instead of delete + re-push, preserving PR continuity (shared branches are still never touched); (3) stale branches conflict with main (`mergeStateStatus=DIRTY`) — `merge_pr` detects this and returns a rework directive instead of attempting a merge; the battery's `G4_MODE=work` exercises the full rework chain (worker re-implements on current main → force-with-lease update → review → merge); (4) new fixture issue #11 (`POST /invoices` 500→400 on invalid bodies) was seeded and resolved through the factory, leaving a fresh bounded issue trail for Phase 5's feedback-loop re-run.
+
+**F4 resolved positively:** the merge approval gate executes the merge exactly once across a mid-approval SIGKILL, with real git side effects on a real repo.
 
 ## 2. Goal & non-goals
 
