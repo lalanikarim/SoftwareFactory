@@ -26,7 +26,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Harness } from "@earendil-works/pi-durable";
-import { localModels, providerId, modelId } from "../../engram/poc/lib/model.mjs";
+import { localModels, providerId, modelId } from "./vendor/engram/poc/lib/model.mjs";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { sandboxRegistry } from "./lib/factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools, factoryReviewTool } from "./lib/factory-reviewer.mjs";

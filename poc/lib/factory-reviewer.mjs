@@ -19,7 +19,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
+import { PodmanSandboxEnv } from "../vendor/engram/poc/lib/podman-sandbox.mjs";
 import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { sandboxRegistry, awaitIdleWithinBudget } from "./factory-worker.mjs";
 

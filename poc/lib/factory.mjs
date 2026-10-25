@@ -15,8 +15,8 @@ import { Harness, createRegistry, defineExtension } from "@earendil-works/pi-dur
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { localModels, providerId, modelId } from "../../../engram/poc/lib/model.mjs";
-import { loadDotEnv } from "../../../engram/poc/lib/env.mjs";
+import { localModels, providerId, modelId } from "../vendor/engram/poc/lib/model.mjs";
+import { loadDotEnv } from "../vendor/engram/poc/lib/env.mjs";
 import { factoryDelegateTool, factoryWorkerTask, sandboxRegistry } from "./factory-worker.mjs";
 import { factoryReviewerTask, makeReviewerRoleTools } from "./factory-reviewer.mjs";
 import { openDraftPrTool } from "./open-draft-pr.mjs";

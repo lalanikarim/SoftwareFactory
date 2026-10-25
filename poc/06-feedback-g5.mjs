@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadFactoryDotEnv } from "./lib/factory.mjs";
-import { loadDotEnv } from "../../engram/poc/lib/env.mjs";
+import { loadDotEnv } from "./vendor/engram/poc/lib/env.mjs";
 
 const pexec = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
