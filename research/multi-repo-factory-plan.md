@@ -67,9 +67,11 @@ Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs
 
 ### 3.4 Shared-resource governance (the one new design problem)
 
+*Status: implemented — `awaitIdleWithinBudget` in `poc/lib/factory-worker.mjs`, enforced in both worker and reviewer wait phases from `budgets.wallSecsPerIssue`; live-verified with a 5s budget (clean abort, partial branch preserved, no PR opened).*
+
 All factories share one inference endpoint (Aurora/llama-server on the RTX 4090). Today there is no queueing or budgeting anywhere; a trap issue on repo A (issue #4 showed ~30 min of dead-ends in dev runs) would silently starve B and C.
 
-- **Per-issue wall-clock budget** (`budgets.wallSecsPerIssue`): enforced host-side — the factory aborts the run, leaves the partial branch for the stale-branch rework path, and records the overrun in its audit log. This bounds worst-case starvation per issue.
+- **Per-issue wall-clock budget** (`budgets.wallSecsPerIssue`): enforced host-side in the worker's and reviewer's wait phases — on overrun the conversation is aborted cleanly (`ConversationHandle.abort`), the sandbox is torn down, the partial branch stays on disk for the stale-branch rework path, and the overrun is recorded in the task outcome (surfaced to the orchestrator as a `delegate` error) plus an audit log line. This bounds worst-case starvation per issue.
 - **Per-factory concurrency stays 1** (already true: one root conversation processes submissions sequentially). With N factories, total concurrent GPU demand is bounded by N; admission control beyond that is out of scope for the pilot.
 - **Honest limit:** budgets cap the damage; they are not fair-share scheduling. If measured contention becomes a problem (Phase 6 instrumentation already extracts per-run tokens/wall time — extend `07-measurement.mjs` to aggregate across factories), revisit with a real queue.
 

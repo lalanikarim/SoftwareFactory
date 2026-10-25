@@ -94,7 +94,22 @@ async function cleanupSandbox(convId, ctx) {
   }
 }
 
-export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null }) {
+/**
+ * Wait for a conversation to go idle, bounded by a wall-clock budget (M4).
+ * Returns "idle" or "overrun" — the caller decides how to abort.
+ */
+export async function awaitIdleWithinBudget(handle, ctx, budgetSecs) {
+  const deadline = Date.now() + budgetSecs * 1000;
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve("overrun"), Math.max(0, deadline - Date.now())); });
+  try {
+    return await Promise.race([handle.waitForIdle(ctx).then(() => "idle"), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null, wallSecsPerIssue = 1800 }) {
   // TEMP(debug): log full stacks for phase faults while G1 is being brought up.
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
@@ -161,7 +176,22 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const convId = task.state.checkpoint.convId;
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("worker conversation missing");
-        await handle.waitForIdle(ctx);
+
+        // M4: host-side wall-clock budget. The partial branch stays on disk
+        // for the stale-branch rework path; the overrun is recorded in the
+        // task outcome and the audit log.
+        const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
+        if (waitResult === "overrun") {
+          console.error(`[factory.worker] BUDGET: issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting run; partial branch preserved`);
+          try { await handle.abort(ctx); } catch (e) { console.error(`[factory.worker] budget abort: ${e.message}`); }
+          await cleanupSandbox(convId, ctx);
+          await runtime.commit(
+            () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
+            ctx,
+          );
+          return;
+        }
+
         let answer = "";
         const view = await runtime.context(convId, ctx);
         for (const m of [...view.messages].reverse()) {
@@ -215,7 +245,7 @@ export function factoryDelegateTool({ taskDef, modelRef }) {
           {
             type: "text",
             text: JSON.stringify(
-              outcome.status === "completed" ? { report: outcome.result.answer } : { error: outcome.error?.message ?? outcome.status },
+              outcome.status === "completed" ? { report: outcome.result.answer } : { error: outcome.error?.message ?? outcome.reason ?? outcome.status },
             ),
           },
         ],
