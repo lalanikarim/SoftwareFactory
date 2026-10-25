@@ -214,15 +214,15 @@ try {
     dispatch: async (repo, event) => { routedTo.push({ repo, number: event.issue.number }); },
     logPath: join(tmp, "intake-routes-log.jsonl"),
     routes: [
-      { repo: REPO_A, secret: SECRET_A },
-      { repo: REPO_B, secret: SECRET_B },
+      { repo: REPO_A, secret: SECRET_A, allowedSenders: ["trusted-user"] },
+      { repo: REPO_B, secret: SECRET_B, allowedSenders: ["trusted-user"] },
     ],
   });
 
   try {
     const signA = (body) => `sha256=${createHmac("sha256", SECRET_A).update(body).digest("hex")}`;
     const signB = (body) => `sha256=${createHmac("sha256", SECRET_B).update(body).digest("hex")}`;
-    const eventFor = (repo, number) => ({ ...issueEvent({ number, title: "routed", body: "ok", labels: ["agent"] }), repository: { full_name: repo } });
+    const eventFor = (repo, number, sender = "trusted-user") => ({ ...issueEvent({ number, title: "routed", body: "ok", labels: ["agent"] }), repository: { full_name: repo }, sender: { login: sender } });
 
     // 13. Valid signature for repo A -> routed to A only.
     const evA = eventFor(REPO_A, 21);
@@ -263,11 +263,28 @@ try {
     const wide = await startIntakeServer({ host: "0.0.0.0", routes: [{ repo: REPO_A, secret: SECRET_A }], dispatch: async () => {}, port: 0 });
     wide.server.close();
     ok("reachable bind requires per-repo secrets (routes) — refused otherwise");
+
+    // 18. Sender allowlist: valid signature but sender not on the route's
+    //      allowedSenders -> 403, not routed.
+    const evEvil = eventFor(REPO_A, 24, "evil-user");
+    const rawEvil = JSON.stringify(evEvil);
+    const rEvil = await post(routesServer.port, evEvil, { signature: signA(rawEvil) });
+    assert.equal(rEvil.status, 403);
+    assert.equal(routedTo.length, 2, "non-allowlisted sender must not route");
+    ok("valid signature from a non-allowlisted sender is rejected 403 (sender allowlist)");
+
+    // 19. Allowlisted sender still routes (regression guard for check 18).
+    const evOk = eventFor(REPO_A, 25, "trusted-user");
+    const rawOk = JSON.stringify(evOk);
+    const rOk = await post(routesServer.port, evOk, { signature: signA(rawOk) });
+    assert.equal(rOk.status, 202);
+    assert.deepEqual(routedTo.at(-1), { repo: REPO_A, number: 25 });
+    ok("allowlisted sender routes normally");
   } finally {
     routesServer.server.close();
   }
 
-  console.log(`\nG0 PASS — ${passed}/18 checks (exactly-once intake under simulated retry; untrusted delimiting + webhook signature verification + multi-repo routing/M3)`);
+  console.log(`\nG0 PASS — ${passed}/20 checks (exactly-once intake under simulated retry; untrusted delimiting + webhook signature verification + multi-repo routing/M3 + sender allowlist)`);
 } finally {
   server.close();
 }

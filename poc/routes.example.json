@@ -2,6 +2,7 @@
   {
     "repo": "lalanikarim/factory-fixture",
     "secret": "REPLACE-WITH-THE-REPO-S-GITHUB-WEBHOOK-SECRET",
-    "target": "http://127.0.0.1:9601"
+    "target": "http://127.0.0.1:9601",
+    "allowedSenders": ["lalanikarim"]
   }
 ]

@@ -48,13 +48,14 @@ One validated JSON file per managed repo (factory-side, not in the target repo),
 
 ### 3.2 Webhook adapter routing (per-repo secrets)
 
-*Status: implemented — `poc/lib/adapter.mjs` + routes mode in `poc/lib/intake.mjs`; G0 extended to 18/18 with M3 cross-repo rejection checks.*
+*Status: implemented — `poc/lib/adapter.mjs` + routes mode in `poc/lib/intake.mjs`; G0 extended to 20/20 (M3 cross-repo rejection + sender allowlist).*
 
 Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs`):
 
 - Adapter holds a **`repo full_name → { secret, /tasks target }` map** (from its own config), one entry per managed repo.
 - Verification stays **pre-parse**: the raw body is HMAC-checked against each configured secret in constant time; the matching secret identifies both authenticity *and* routing — signature validity doubles as per-repo authorization. An event signed with repo A's secret but naming repo B is rejected (403 + audit line), so a leaked per-repo secret cannot forge submissions into another factory.
 - Secrets remain **per-repo, never global** (design decision already recorded in `poc/README.md`); org-level webhooks are deliberately avoided.
+- **Sender allowlist:** signature validity proves GitHub sent the event, not who acted. Each route may declare `allowedSenders: [logins]`; non-matching `sender.login` is rejected 403 + audit line (checked post-signature, so the field is trusted). This gates both issue creation and label triage.
 - `requestId = "issue-<n>"` stays as-is: each factory has its own durable namespace, so no cross-repo collisions.
 
 ### 3.3 Process model & supervision
