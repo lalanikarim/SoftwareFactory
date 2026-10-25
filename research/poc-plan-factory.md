@@ -8,7 +8,7 @@ Three prior bodies of work make this plan possible:
 
 1. **The research** established what a software factory is: repeatable intake, governed runtimes, defined stage roles, independent verification, evidence attached to every change, human approval at merge, and a feedback loop that makes the next task better than the last.
 2. **The feasibility assessment** mapped all 11 factory requirements onto Pi Durable primitives and found 9 of them already crash-verified by the companion PoC in `../PiDurable/`.
-3. **The PiDurable PoC** proved the expensive unknowns: SIGKILL→resume recovery, exactly-once submissions (`requestId`), crash-durable approval gates, sandboxed per-conversation execution (Podman), lossless SSE streaming, subagent fan-out with role-scoped tools, compaction on a local model, and a 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.
+3. **The engram PoC** proved the expensive unknowns: SIGKILL→resume recovery, exactly-once submissions (`requestId`), crash-durable approval gates, sandboxed per-conversation execution (Podman), lossless SSE streaming, subagent fan-out with role-scoped tools, compaction on a local model, and a 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.
 
 **What that PoC did *not* prove — and what this PoC exists to test:**
 
@@ -35,14 +35,14 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
 7. JSONL audit log records every event with delivery id + requestId (replayable intake).
 8. Pure intake helpers behave as specified.
 
-**Design decision (F1 resolved):** the adapter is deliberately stateless w.r.t. retries — dedup happens at the durable server's `submit()` via the client-chosen `requestId` (crash-verified in `../PiDurable/poc/02-durable.mjs`, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.
+**Design decision (F1 resolved):** the adapter is deliberately stateless w.r.t. retries — dedup happens at the durable server's `submit()` via the client-chosen `requestId` (crash-verified in `../engram/poc/02-durable.mjs`, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.
 
 **Artifacts:**
 
 - Fixture repo: [`lalanikarim/factory-fixture`](https://github.com/lalanikarim/factory-fixture) (private) — dependency-free Node ledger service, 17/17 tests passing. Seeded issues: #1 unknown-id 500→404 (bounded), #2 status filter on `GET /invoices` (bounded feature), #3 `/summary` counts voided invoices (subtle spec violation), #4 `withRetry` never surfaces upstream 5xx errors (**trap** — obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status).
 - Implementation: this repo's [`poc/`](../poc/) — `poc/lib/intake.mjs`, `poc/01-intake-g0.mjs` (Phase 0); Phase 1 wiring (`poc/lib/factory.mjs`, `poc/lib/factory-worker.mjs`, `poc/lib/open-draft-pr.mjs`, `poc/02-orchestration-g1.mjs`) lands in the same PR.
 
-  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the `PiDurable` checkout and repo were renamed to `engram` — [`lalanikarim/engram`](https://github.com/lalanikarim/engram); all shared-lib imports in `poc/` now point at `../engram/poc/lib/`.)_
+  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to this repo's `poc/` so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the `PiDurable` checkout and repo were renamed to `engram` — [`lalanikarim/engram`](https://github.com/lalanikarim/engram); all shared-lib imports in `poc/` now point at `../engram/poc/lib/`. The same day this repo was renamed from `SoftwareFactory` to [`drydock`](https://github.com/lalanikarim/drydock).)_
 
 **Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
 

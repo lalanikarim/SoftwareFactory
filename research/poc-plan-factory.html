@@ -183,7 +183,7 @@
 
   <div class="card">
     <h4>Already proven (do not re-test)</h4>
-    <p style="margin:0">The companion Pi Durable PoC (<code>../engram/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
+    <p style="margin:0">The companion engram PoC (<code>../engram/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
   </div>
 
   <h3>What this PoC exists to test</h3>
@@ -212,7 +212,7 @@
   </div>
 
   <h3>Design decision (F1 resolved)</h3>
-  <p>The adapter is deliberately <strong>stateless w.r.t. retries</strong>: GitHub redeliveries carry new delivery ids but the same issue, so exactly-once holds at the durable server's <code>submit()</code> via the client-chosen <code>requestId</code> (crash-verified in <code>../PiDurable/poc/02-durable.mjs</code>, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.</p>
+  <p>The adapter is deliberately <strong>stateless w.r.t. retries</strong>: GitHub redeliveries carry new delivery ids but the same issue, so exactly-once holds at the durable server's <code>submit()</code> via the client-chosen <code>requestId</code> (crash-verified in <code>../engram/poc/02-durable.mjs</code>, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.</p>
 
   <h3>Artifacts</h3>
   <div class="table-scroll">
@@ -221,7 +221,7 @@
       <tbody>
         <tr><td>Fixture repo (private) — dependency-free Node ledger service, 17/17 tests passing</td><td><a href="https://github.com/lalanikarim/factory-fixture">lalanikarim/factory-fixture</a></td></tr>
         <tr><td>Intake adapter + G0 battery (+ Phase 1 wiring)</td><td>this repo's <a href="../poc/README.md"><code>poc/</code></a> — <code>{lib/intake.mjs, 01-intake-g0.mjs, lib/factory.mjs, lib/factory-worker.mjs, lib/open-draft-pr.mjs, 02-orchestration-g1.mjs}</code></td></tr>
-        <tr><td colspan="2" style="color:var(--muted);font-size:0.9em">Location note (2026-10-23): the PoC code initially landed in <code>PiDurable/poc-factory</code>; it has been relocated to <code>SoftwareFactory/poc/</code> so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the <code>PiDurable</code> checkout and repo were renamed to <code>engram</code> — <a href="https://github.com/lalanikarim/engram">lalanikarim/engram</a>; all shared-lib imports in <code>poc/</code> now point at <code>../engram/poc/lib/</code>.)</td></tr>
+        <tr><td colspan="2" style="color:var(--muted);font-size:0.9em">Location note (2026-10-23): the PoC code initially landed in <code>PiDurable/poc-factory</code>; it has been relocated to this repo's <code>poc/</code> so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the <code>PiDurable</code> checkout and repo were renamed to <code>engram</code> — <a href="https://github.com/lalanikarim/engram">lalanikarim/engram</a>; all shared-lib imports in <code>poc/</code> now point at <code>../engram/poc/lib/</code>. The same day this repo was renamed from <code>SoftwareFactory</code> to <a href="https://github.com/lalanikarim/drydock">drydock</a>.)</td></tr>
       </tbody>
     </table>
   </div>
