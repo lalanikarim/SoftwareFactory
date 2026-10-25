@@ -149,7 +149,7 @@
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
       <span class="chip">Date <b>2026-10-25</b></span>
-      <span class="chip">Status <b>Phases 0–4 complete · G0, G1, G2, G3, G4 passed</b></span>
+      <span class="chip">Status <b>Phases 0–5 complete · G0, G1, G2, G3, G4, G5 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -164,6 +164,7 @@
     <a href="#phase2-results">Phase 2 results</a>
     <a href="#phase3-results">Phase 3 results</a>
     <a href="#phase4-results">Phase 4 results</a>
+    <a href="#phase5-results">Phase 5 results</a>
     <a href="#goal">Goal</a>
     <a href="#assumptions">Assumptions</a>
     <a href="#architecture">Architecture</a>
@@ -312,6 +313,38 @@
   <p><strong>Findings recorded during the gate:</strong> (1) GitHub refuses to merge draft PRs — <code>merge_pr</code> converts draft → ready (<code>gh pr ready</code>) as part of the approved merge action (approval implies review is done); (2) deleting a remote branch auto-closes the open PR tracking it — the stale-branch retry path now uses <code>--force-with-lease</code> on our own factory-owned <code>agent/issue-*</code> branch instead of delete + re-push, preserving PR continuity (shared branches are still never touched); (3) stale branches conflict with main (<code>mergeStateStatus=DIRTY</code>) — <code>merge_pr</code> detects this and returns a rework directive instead of attempting a merge; the battery's <code>G4_MODE=work</code> exercises the full rework chain (worker re-implements on current main → force-with-lease update → review → merge); (4) new fixture issue #11 (<code>POST /invoices</code> 500→400 on invalid bodies) was seeded and resolved through the factory, leaving a fresh bounded issue trail for Phase 5's feedback-loop re-run.</p>
 
   <p><strong>F4 resolved positively:</strong> the merge approval gate executes the merge exactly once across a mid-approval SIGKILL, with real git side effects on a real repo.</p>
+</section>
+
+<!-- 1f. PHASE 5 RESULTS -->
+<section id="phase5-results">
+  <h2><span class="num">1f</span> Phase 5 results (2026-10-25)</h2>
+
+  <div class="callout ok">
+    <b class="label">Gate G5: PASS — one verifiable instance of "the same mistake doesn't recur"</b>
+    Battery <code>poc/06-feedback-g5.mjs</code> (results in <code>poc/data/g5-results.json</code>). Two factory runs on the same issue, separated by one recorded lesson.
+  </div>
+
+  <p><strong>Anchor finding (from a real prior run).</strong> On issue #11 (<a href="https://github.com/lalanikarim/factory-fixture/pull/12">PR #12</a>) the worker fixed "validation errors surface as 500" with a <strong>handler-level patch</strong>: <code>catch</code> + <code>instanceof TypeError</code> + re-throw with <code>statusCode: 400</code> in the route handler, instead of giving the error class a <code>statusCode</code> the way <code>InvoiceNotFoundError</code> already has. The independent reviewer flagged exactly this fragility ("if store.add ever throws a non-TypeError validation error … it would again surface as 500").</p>
+
+  <p><strong>Similar issue for the re-run.</strong> Seeded fixture <a href="https://github.com/lalanikarim/factory-fixture/issues/13">issue #13</a>: invalid status transitions return 500 (<code>InvalidTransitionError</code> has no <code>statusCode</code>) against the README's 4xx spec. The naive fix is the same handler-level patch; the corrected behavior is a root-level fix.</p>
+
+  <p><strong>Mechanism.</strong> A durable <strong>lessons document</strong> (host-side file, so it outlives per-run sqlite databases) plus an orchestrator tool <code>note_lesson</code> that appends one distilled lesson per review finding. Every worker prompt now includes the lessons in a trusted section outside <code>&lt;untrusted&gt;</code> — host-side at spawn, deterministic. The battery acts as the human driver: if the orchestrator does not record the lesson itself (its standing instruction says to do so on every refused review), the battery submits a trusted instruction to record it and counts that as an intervention.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Arm</th><th>Lessons active</th><th>Review</th><th>Fix pattern (objective diff check)</th></tr></thead>
+      <tbody>
+        <tr><td>A — baseline</td><td>no</td><td>PASS (<a href="https://github.com/lalanikarim/factory-fixture/pull/14">PR #14</a>)</td><td><strong>handler patch</strong> — <code>catch</code> + <code>instanceof InvalidTransitionError</code> / <code>instanceof TypeError</code> re-thrown with statusCode in the route handler (the exact #11 pattern)</td></tr>
+        <tr><td>B — re-run, same issue</td><td>yes</td><td>PASS (same PR, refreshed)</td><td><strong>root fix</strong> — <code>this.statusCode = 409</code> added to the <code>InvalidTransitionError</code> class; no handler patch</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Lesson recorded (via <code>note_lesson</code>, human-driver intervention in arm A since both arms passed review so the refusal-triggered path was not exercised): <em>"Fix error-status bugs at the root: give the thrown error class a statusCode property (as InvoiceNotFoundError does for issue #11), not an instanceof/catch-and-rethrow patch in the route handler."</em></p>
+
+  <p><strong>Attribution: strong</strong> — the baseline arm exhibited the mistake that then did not recur after the lesson was recorded. <strong>Caveats, stated honestly:</strong> (1) single trial per arm — this establishes one verifiable instance, not statistical reliability of the loop; (2) the orchestrator's <em>autonomous</em> lesson-distillation path (refusal → <code>note_lesson</code>) was not exercised because both arms passed review — the recording in arm A came from the human-driver fallback; (3) fix-pattern classification is a diff heuristic; raw diff excerpts are preserved in <code>g5-results.json</code> for human verification. The first battery run had bookkeeping bugs (orphaned factory holding the port; lesson file path mismatch) but showed the identical A→B transition behaviorally; the canonical rerun above is the recorded result.</p>
+
+  <p><strong>G5 closes the loop claim:</strong> with a durable lessons document feeding every worker prompt, a concrete reviewer finding from a prior run was recorded and the same mistake did not recur on an analogous issue. The factory now has all five behavioral gates (G0–G5); only Phase 6 (measurement &amp; sizing) remains before the PoC is complete.</p>
 </section>
 
 <!-- 2. GOAL -->

@@ -11,7 +11,7 @@ Implementation for [research/poc-plan-factory.md](../research/poc-plan-factory.m
 | 2 — Worker quality | G2: ≥ 2/3 bounded issues produce passing, scoped PRs | **PASS** — 3/3 (`node 03-worker-quality-g2.mjs`), zero human edits; see plan doc §1c |
 | 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | **PASS** — 3/3 (`node 04-reviewer-g3.mjs`); gate owns its evidence, closed loop on #4 → draft PR in 441s |
 | 4 — Evidence & human checkpoint | G4: exactly-once merge across crash | **PASS** (`node 05-merge-gate-g4.mjs`, T1 143s / T2 144s): evidence complete on PR; single-use durable approvals; SIGKILL while approval pending → restart → approve → exactly one merge commit |
-| 5 — Feedback loop | G5: one verifiable "same mistake doesn't recur" | pending |
+| 5 — Feedback loop | G5: one verifiable "same mistake doesn't recur" | **PASS** (`node 06-feedback-g5.mjs`, 306s): baseline arm reproduced the #11 handler-patch mistake; after one recorded lesson, the re-run fixed it at the root (statusCode on the error class) — strong attribution; see plan doc §1f |
 | 6 — Measurement & sizing | (no gate) | pending |
 
 ## Fixture
@@ -31,14 +31,16 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 |---|---|
 | `lib/intake.mjs` | Webhook event → `{ requestId: "issue-<n>", content }`; `<untrusted>` delimiting + trusted directive line; JSONL audit log; HTTP server (`POST /webhook/github`) |
 | `01-intake-g0.mjs` | G0 battery (in-process stub factory with exactly-once semantics) + `serve` mode for live wiring to a real `/tasks` endpoint |
-| `lib/factory.mjs` | Factory process: durable harness + root orchestrator conversation + `POST /tasks` / `GET /health`. Orchestrator gets exactly two tools: `delegate`, `open_draft_pr` |
+| `lib/factory.mjs` | Factory process: durable harness + root orchestrator conversation + HTTP surface (`POST /tasks`, `GET /health`, `GET/POST /approvals`, `GET /tool-results`, `GET /lessons`). Orchestrator tools: `delegate`, `open_draft_pr`, `merge_pr`, `note_lesson` |
 | `lib/factory-worker.mjs` | `factory.worker` durable task: host-side issue fetch (`gh api`) + fresh clone on `agent/issue-<n>` + per-conversation Podman sandbox; deterministic worker prompt (issue text inside `<untrusted>`) |
 | `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite; assembles the full evidence body (diff summary, reviewer verdict, test counts, worker report) and refreshes it on existing PRs. Never merges — Phase 4 owns merging |
 | `lib/merge-gate.mjs` | Phase 4 merge gate: approval-gated `gh pr merge` with single-use durable approvals (`factory.merge-approval` doc family); pending-approval transcript scan for the `/approvals` endpoint |
+| `lib/lessons.mjs` | Phase 5 feedback loop: durable lessons document (host-side file, outlives per-run databases) + orchestrator tool `note_lesson`; every worker prompt includes the lessons in a trusted section at spawn |
 | `02-orchestration-g1.mjs` | G1 end-to-end: preflight → factory + intake adapter → simulated webhook delivery → poll for draft PR (objective check) |
 | `03-worker-quality-g2.mjs` | G2 battery: run issues end-to-end (or evaluate existing draft PRs with `--allow-existing`) + objective checks (suite, diff scope, live-server behavior, zero human edits); results to `data/g2-results.json` |
 | `04-reviewer-g3.mjs` | G3 battery: seeded-bad trap caught, known-good passed, closed loop on the trap issue through review gate → draft PR; results to `data/g3-results.json` |
 | `05-merge-gate-g4.mjs` | G4 battery: factory as child process; merge directive → review gate → evidence check → approve via `/approvals` → retry → exactly-one-merge verification; T2 adds SIGKILL while approval pending + restart over the same db; results to `data/g4-results.json`. **Merges the target draft PRs on the fixture repo** |
+| `06-feedback-g5.mjs` | G5 battery: arm A (no lessons) → lesson recorded via `note_lesson` → arm B (same issue, lessons active); objective diff classification of fix pattern (root-level statusCode vs handler patch); results to `data/g5-results.json`. **Leaves the target draft PR open** (no merge in this gate) |
 | `sandbox-image/Dockerfile` | Worker sandbox image: `node:24-alpine` + git. Build: `podman build -t factory-sandbox:latest poc/sandbox-image/` |
 
 ## Design decisions (Phase 1)
@@ -48,6 +50,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 - **Deterministic issue flow.** The orchestrator never handles raw issue text — it reads only the trusted directive line (`Work on GitHub issue number: N`) and calls `delegate({issueNumber})`. The worker task fetches the issue itself via `gh api` and renders it inside `<untrusted>` in its prompt. This minimizes model judgment in the wiring; planning quality is exercised in Phases 2/5.
 - **Worker sandbox per run.** One Podman container per worker conversation (registry keyed by conversation id, routed via the harness `env()` callback), torn down when the task settles.
 - **Branch retry path.** If a prior attempt left a diverged remote `agent/issue-<n>` branch, `open_draft_pr` replaces it with `--force-with-lease` — only our own factory-owned branch is ever forced, and the lease refuses to clobber anything unfetched. (Deleting the branch first would auto-close the open PR tracking it, breaking PR continuity.) Shared branches are never touched.
+- **Lessons are a host-side file, not a durable doc.** Per-run sqlite databases are wiped between battery runs, but standing lessons must outlive them; `note_lesson` appends to a file (`FACTORY_LESSONS_FILE`, default `data/lessons.md`) that every worker prompt reads at spawn. The orchestrator records one lesson per refused review (its standing instruction); if it skips, the human driver can submit a trusted instruction to record it — counted as an intervention. Writing to the lessons file is the only agent-reachable write outside the sandbox; it has no external side effects and is idempotent per identical line.
 
 ## Runbook
 
@@ -64,8 +67,9 @@ node 02-orchestration-g1.mjs --issue 3 --request-id issue-3-dev-<ts>   # dev re-
 node 03-worker-quality-g2.mjs --issues 1,2,3 [--allow-existing]         # G2 battery (needs Aurora + image)
 node 04-reviewer-g3.mjs                                        # G3 battery (needs Aurora + image)
 node 05-merge-gate-g4.mjs [--skip-crash]                       # G4 battery (needs Aurora + image; merges PRs #9/#7 by default — G4_T1_ISSUE / G4_T2_ISSUE to retarget)
+node 06-feedback-g5.mjs                                        # G5 battery (needs Aurora + image; two factory runs on G5_ISSUE, default 13)
 ```
 
-## Next (Phase 5)
+## Next (Phase 6)
 
-Feedback loop: take a concrete reviewer finding from Phases 2–3, record the lesson in the orchestrator's instructions (or file a follow-up task), re-run an analogous issue, and verify the corrected behavior appears. Gate G5: one concrete, verifiable instance of "the same mistake doesn't recur."
+Measurement & sizing: collect per-issue metrics from `pi.usage` and the batteries (tokens by role, wall time, tool calls, human interventions) and write the sizing section for a real single-repo deployment. All five behavioral gates (G0–G5) have passed; this is the final PoC phase.
