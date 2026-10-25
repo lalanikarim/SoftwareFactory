@@ -35,7 +35,7 @@ const requestId = opt("--request-id", `issue-${issueNumber}`);
 const timeoutMin = Number(opt("--timeout-min", "25"));
 
 loadFactoryDotEnv();
-loadDotEnv(); // poc/.env as fallback (e.g. aurora endpoint)
+loadDotEnv(); // poc/.env as fallback (e.g. local model endpoint)
 
 // ---------------------------------------------------------------------------
 // Preflight — fail fast with a clear message, no partial state.
@@ -47,18 +47,18 @@ const check = (label, cond) => {
   if (!cond) ok = false;
 };
 
-const auroraUrl = process.env.OPENAI_BASE_URL;
-check("OPENAI_BASE_URL + OPENAI_API_KEY set", Boolean(auroraUrl && process.env.OPENAI_API_KEY));
+const endpointUrl = process.env.OPENAI_BASE_URL;
+check("OPENAI_BASE_URL + OPENAI_API_KEY set", Boolean(endpointUrl && process.env.OPENAI_API_KEY));
 let modelList = [];
-if (auroraUrl && process.env.OPENAI_API_KEY) {
+if (endpointUrl && process.env.OPENAI_API_KEY) {
   try {
-    const res = await fetch(`${auroraUrl.replace(/\/+$/, "")}/models`, { headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
+    const res = await fetch(`${endpointUrl.replace(/\/+$/, "")}/models`, { headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
     modelList = ((await res.json()).data ?? []).map((m) => m.id);
   } catch (e) {
-    console.log(`  aurora endpoint error: ${e.message}`);
+    console.log(`  model endpoint error: ${e.message}`);
   }
 }
-check("aurora endpoint reachable with a loaded model", modelList.length > 0);
+check("model endpoint reachable with a loaded model", modelList.length > 0);
 
 try {
   await sh("podman", ["image", "exists", "factory-sandbox:latest"]);
