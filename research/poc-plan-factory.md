@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-23 · Status: Phases 0–2 complete (G0, G1, G2 passed) · Phases 3–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-24 · Status: Phases 0–3 complete (G0, G1, G2, G3 passed) · Phases 4–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -84,6 +84,20 @@ Result: [`lalanikarim/factory-fixture#5`](https://github.com/lalanikarim/factory
 Objective checks per issue (no model judgment): suite passes on the branch · every changed file under `src/`, `test/`, or `README.md` (≤ 5 files) · the named behavior verified against a live server from the branch (404 shape, filter semantics incl. 4xx on bogus status, voided exclusion arithmetic) · PR opened by the factory with no subsequent human edits.
 
 **F2 resolved positively:** the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.
+
+## 1d. Phase 3 results (2026-10-24)
+
+**Gate G3: PASS — 3/3.** Reviewer module (`poc/lib/factory-reviewer.mjs`): a read-only subagent role with only `read`, `git_diff` (host-side), `run_tests` (Podman sandbox, no network), and `submit_verdict`. It judges whether the change *actually* satisfies the issue's acceptance criteria — not merely that tests pass. Battery: `poc/04-reviewer-g3.mjs`.
+
+| Test | Input | Result |
+|---|---|---|
+| T1 negative | Seeded bad branch `agent/issue-4-seeded-bad` (timeout "fix" that resolves with a fake `{error}` object; own suite passes 18/18 — the trap) | **caught=true** — verdict `fail`: reviewer named the root cause (non-2xx still treated as success, so `withRetry` retries never fire), quoted the README retry spec, showed the new test codifies the wrong contract, and flagged downstream data loss in `reporting.mjs` |
+| T2 positive control | Known-good `agent/issue-1` (G2's 404 fix) | **passed=true** — verdict `pass` with root-cause evidence (missing `statusCode` on `InvoiceNotFoundError`) and a noted out-of-scope observation (`InvalidTransitionError` still lacks one) |
+| T3 closed loop | Trap issue #4 through the full chain: webhook → orchestrator → worker → review → gate | **gateHeld=true** in 441s — worker committed a correct fix (reject with `HttpError` carrying status, bounded timeout, retries actually fire; 20/20 tests), the independent review passed it with evidence + minor concerns, and draft PR [fixture#9](https://github.com/lalanikarim/factory-fixture/pull/9) opened. Zero human intervention |
+
+**Key design outcome — the gate owns its evidence.** Early runs showed the 27B orchestrator reliably *skips* an optional `review` tool step (it went straight to `open_draft_pr`, and even a refusal message didn't make it retry with review). The fix is structural, not prompt-based: **`open_draft_pr` itself runs the independent reviewer on the committed branch before pushing** and refuses (returning the findings) if the verdict isn't `pass`. The orchestrator's flow collapses to `delegate → open_draft_pr`; review can no longer be skipped because it *is* the merge gate. This mirrors real CI: the check runs at the gate, not as an optional agent step.
+
+**Other findings recorded:** (1) pi-durable `PodmanSandboxEnv.exec` timeout unit bug — filed upstream as [engram#14](https://github.com/lalanikarim/engram/issues/14), fixed by PR #15; (2) interrupted factory runs leave stuck tasks that stall the scheduler for tens of minutes — G3 T3 now starts from a fresh `factory.sqlite` each run; (3) the 27B worker on trap issue #4 needs up to ~30 min end-to-end (vs ~7 min on simpler issues) — it explores, dead-ends, and recovers; T3 timeout is 60 min.
 
 ## 2. Goal & non-goals
 
@@ -183,7 +197,7 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 **Gate G2:** **≥ 2 of 3 issues produce a passing, scoped PR with zero human edits.** This acceptance rate is the number that decides whether local models can hold the implementation role.
 
-### Phase 3 — Independent reviewer (negative test matters)
+### Phase 3 — Independent reviewer (negative test matters) ✅ *G3 PASS 2026-10-24 — see §1d*
 
 **Setup.** Reviewer subagent: own checkout of the worker's branch, read-only tools plus `bash` restricted to the test suite; emits `structuredOutput`:
 
