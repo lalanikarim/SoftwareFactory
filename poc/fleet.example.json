@@ -1,0 +1,15 @@
+{
+  "adapter": {
+    "port": 9700,
+    "routesFile": "data/routes.json",
+    "logPath": "data/intake-adapter.jsonl"
+  },
+  "factories": [
+    {
+      "repo": "lalanikarim/factory-fixture",
+      "config": "config/factory-fixture.json",
+      "port": 9601,
+      "db": "data/factories/factory-fixture.sqlite"
+    }
+  ]
+}

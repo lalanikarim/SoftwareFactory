@@ -59,6 +59,8 @@ Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs
 
 ### 3.3 Process model & supervision
 
+*Status: implemented — `poc/supervise.mjs` (fleet file, restart-on-fault, status table); examples in `poc/fleet.example.json` / `poc/routes.example.json`.*
+
 - **One factory process per repo** — the existing `lib/factory.mjs` needs no core changes; each instance gets its own port, sqlite db, lessons file, and config from §3.1.
 - Supervision via compose/systemd: one unit per factory + one adapter unit; restart-on-fault (the durable harness already recovers in-process state from its db — crash-durability is the PoC's core property).
 - **Status aggregation**: a small read-only script/endpoint that fans out to each factory's `/health`, `/approvals`, and `/tool-results` and prints one table: repo, current issue, state (working / awaiting approval / stuck), wall time so far. This is the operator dashboard for Target 1.

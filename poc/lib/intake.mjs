@@ -141,7 +141,12 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
   }
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.method !== "POST" || new URL(req.url, "http://localhost").pathname !== "/webhook/github") {
+      const url = new URL(req.url, "http://localhost");
+      if (req.method === "GET" && url.pathname === "/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ status: "ok", routes: routes ? routes.map((r) => r.repo) : null }));
+      }
+      if (req.method !== "POST" || url.pathname !== "/webhook/github") {
         res.writeHead(404, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "not found" }));
       }

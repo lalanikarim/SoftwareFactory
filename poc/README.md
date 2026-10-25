@@ -35,6 +35,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 | `lib/factory.mjs` | Factory process: durable harness + root orchestrator conversation + HTTP surface (`POST /tasks`, `GET /health`, `GET/POST /approvals`, `GET /tool-results`, `GET /lessons`). Orchestrator tools: `delegate`, `open_draft_pr`, `merge_pr`, `note_lesson`. Loads per-repo config (CLI arg or `FACTORY_CONFIG`), falling back to legacy env |
 | `lib/factory-config.mjs` | Per-repo config loading + strict validation (multi-repo plan §3.1): repo, sandbox image, setup/test commands (argv-only, no shell metacharacters), budgets; one file per managed repo in `config/` |
 | `lib/setup-sandbox.mjs` | Ephemeral setup phase (§3.6): runs the repo's `setupCommand` in a one-shot networked container before the sealed agent sandbox starts; deps persist via the mounted workspace; idempotent, fails closed |
+| `supervise.mjs` | Fleet supervisor (§3.3): starts one factory process per repo + the adapter from a fleet file (`fleet.example.json`); restart-on-fault with backoff and a cap; `status` fans out to each factory's `/health`, `/approvals`, `/tool-results` and prints one operator table |
 | `config/factory-fixture.json` | The fixture repo's config (test command `node --test`, 30-min budget) |
 | `lib/factory-worker.mjs` | `factory.worker` durable task: host-side issue fetch (`gh api`) + fresh clone on `agent/issue-<n>` + per-conversation Podman sandbox; deterministic worker prompt (issue text inside `<untrusted>`) |
 | `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite; assembles the full evidence body (diff summary, reviewer verdict, test counts, worker report) and refreshes it on existing PRs. Never merges — Phase 4 owns merging |
@@ -78,6 +79,11 @@ GITHUB_WEBHOOK_SECRET=... node 01-intake-g0.mjs serve --host 0.0.0.0 --port 9475
 # Multi-repo adapter (one endpoint fronting N factories; routes file is JSON:
 # [{"repo":"owner/name","secret":"...","target":"http://127.0.0.1:9601"}, ...])
 node lib/adapter.mjs 9700 data/routes.json
+
+# Fleet supervision (§3.3): one factory process per repo + adapter, restart-on-fault,
+# read-only status table (repo | port | state | pending approvals | last tool)
+node supervise.mjs run data/fleet.json
+node supervise.mjs status data/fleet.json
 node lib/factory.mjs 9600                            # standalone factory (legacy env fallback)
 node lib/factory.mjs 9600 data/factory.sqlite config/factory-fixture.json   # with per-repo config [port] [dbPath] [configPath]
 node 02-orchestration-g1.mjs --issue 3               # G1 end-to-end (needs Aurora + image)
