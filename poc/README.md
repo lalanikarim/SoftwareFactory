@@ -104,8 +104,14 @@ Drydock is being onboarded as its own first managed repo. Status:
 - **Done:** runtime dependencies are declared (`package.json` + `package-lock.json`) so `npm ci` works in a fresh clone/sealed sandbox; the GPU-free G0 battery (`node 01-intake-g0.mjs`, exit status is the gate) serves as the repo's test entry point — it exercises intake, signature verification, and multi-repo routing without inference.
 - **Done:** engram shared libs are pinned in-repo as a git submodule at `poc/vendor/engram` (SHA `0a8b63c`, engram main as of 2026-10-25). All imports are now relative to the repo — no sibling-directory dependency. Fresh clones need `git clone --recurse-submodules` (or `git submodule update --init`) before use.
 - **Verified:** a fresh clone of this branch + `npm ci` resolves every module and passes G0 (no GPU).
+- **Config written:** `config/lalanikarim-drydock.json` — `setupCommand: npm ci --prefix poc`, `testCommand: node poc/01-intake-g0.mjs` (both verified in the sandbox against a fresh clone; the sealed test run passes G0). Clones for drydock issues use `--recurse-submodules` so the pinned engram libs are present.
 
 Bumping the engram pin: `cd poc/vendor/engram && git fetch origin && git checkout <new-sha>`, then commit the submodule pointer from the repo root.
+
+**Remaining before the first self-PR (GitHub-side, human actions):**
+1. Generate a webhook secret for drydock and add it to the local adapter routes file (`data/routes.json`, gitignored) with `target` = the drydock factory's URL.
+2. Create the repo webhook on `lalanikarim/drydock` (issues → adapter URL, that secret).
+3. Branch protection on `main`: no direct pushes, require PR review (enforces the existing AGENTS.md "never commit on main" for agent work too).
 
 ## PoC complete — what's next
 

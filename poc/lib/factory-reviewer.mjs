@@ -57,12 +57,13 @@ async function prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumb
   // negative-test branches).
   const local = join(workDir, `issue-${issueNumber}`);
   try {
-    await sh("git", ["clone", "--quiet", "--branch", branch, local, ws]);
+    // --recurse-submodules: managed repos may pin shared libs as submodules.
+    await sh("git", ["clone", "--quiet", "--recurse-submodules", "--branch", branch, local, ws]);
   } catch {
     const authUrl = process.env.FACTORY_GITHUB_TOKEN
       ? `https://x-access-token:${process.env.FACTORY_GITHUB_TOKEN}@github.com/${fixturesRepo}.git`
       : `https://github.com/${fixturesRepo}.git`;
-    await sh("git", ["clone", "--quiet", "--branch", branch, authUrl, ws]);
+    await sh("git", ["clone", "--quiet", "--recurse-submodules", "--branch", branch, authUrl, ws]);
   }
   return ws;
 }
