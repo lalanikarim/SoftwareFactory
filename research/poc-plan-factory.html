@@ -148,8 +148,8 @@
     <h1>Software Factory PoC Plan</h1>
     <p class="sub">Proving the "issue → reviewed PR" loop end-to-end on Pi Durable with local models: webhook intake, sandboxed worker, independent reviewer, evidence on the PR, human approval at merge — crash-proof at every stage.</p>
     <div class="meta">
-      <span class="chip">Date <b>2026-10-23</b></span>
-      <span class="chip">Status <b>Phases 0–2 complete · G0, G1, G2 passed</b></span>
+      <span class="chip">Date <b>2026-10-24</b></span>
+      <span class="chip">Status <b>Phases 0–3 complete · G0, G1, G2, G3 passed</b></span>
       <span class="chip"><b>7</b> phases · <b>6</b> gates</span>
       <span class="chip">Est. <b>5–7 focused days</b></span>
     </div>
@@ -183,7 +183,7 @@
 
   <div class="card">
     <h4>Already proven (do not re-test)</h4>
-    <p style="margin:0">The companion Pi Durable PoC (<code>../PiDurable/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
+    <p style="margin:0">The companion Pi Durable PoC (<code>../engram/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
   </div>
 
   <h3>What this PoC exists to test</h3>
@@ -221,7 +221,7 @@
       <tbody>
         <tr><td>Fixture repo (private) — dependency-free Node ledger service, 17/17 tests passing</td><td><a href="https://github.com/lalanikarim/factory-fixture">lalanikarim/factory-fixture</a></td></tr>
         <tr><td>Intake adapter + G0 battery (+ Phase 1 wiring)</td><td>this repo's <a href="../poc/README.md"><code>poc/</code></a> — <code>{lib/intake.mjs, 01-intake-g0.mjs, lib/factory.mjs, lib/factory-worker.mjs, lib/open-draft-pr.mjs, 02-orchestration-g1.mjs}</code></td></tr>
-        <tr><td colspan="2" style="color:var(--muted);font-size:0.9em">Location note (2026-10-23): the PoC code initially landed in <code>PiDurable/poc-factory</code>; it has been relocated to <code>SoftwareFactory/poc/</code> so all factory work lives with its plan and results.</td></tr>
+        <tr><td colspan="2" style="color:var(--muted);font-size:0.9em">Location note (2026-10-23): the PoC code initially landed in <code>PiDurable/poc-factory</code>; it has been relocated to <code>SoftwareFactory/poc/</code> so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the <code>PiDurable</code> checkout and repo were renamed to <code>engram</code> — <a href="https://github.com/lalanikarim/engram">lalanikarim/engram</a>; all shared-lib imports in <code>poc/</code> now point at <code>../engram/poc/lib/</code>.)</td></tr>
       </tbody>
     </table>
   </div>
@@ -230,7 +230,7 @@
 
   <div class="callout">
     <b class="label">Next</b>
-    Phase 1 — orchestrator wiring: issue → plan → worker subagent in Podman sandbox → commit + draft PR (reuses <code>poc/lib/{aurora,podman-sandbox,worker}.mjs</code> and the fan-out pattern from <code>poc/03-subagents.mjs</code>). Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
+    Phase 1 — orchestrator wiring: issue → plan → worker subagent in Podman sandbox → commit + draft PR (reuses <code>poc/lib/{model,podman-sandbox,worker}.mjs</code> and the fan-out pattern from <code>poc/03-subagents.mjs</code>). Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
   </div>
 </section>
 
@@ -282,6 +282,31 @@
   </div>
 
   <p><strong>F2 resolved positively:</strong> the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.</p>
+</section>
+
+<!-- 1d. PHASE 3 RESULTS -->
+<section id="phase3-results">
+  <h2><span class="num">1d</span> Phase 3 results (2026-10-24)</h2>
+
+  <div class="callout ok">
+    <b class="label">Gate G3: PASS — 3/3</b>
+    Reviewer module (<code>poc/lib/factory-reviewer.mjs</code>): a read-only subagent role with only <code>read</code>, <code>git_diff</code> (host-side), <code>run_tests</code> (Podman sandbox, no network), and <code>submit_verdict</code>. It judges whether the change <em>actually</em> satisfies the issue's acceptance criteria — not merely that tests pass. Battery: <code>poc/04-reviewer-g3.mjs</code>.
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Input</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>T1 negative</td><td>Seeded bad branch <code>agent/issue-4-seeded-bad</code> (timeout “fix” that resolves with a fake <code>{error}</code> object; own suite passes 18/18 — the trap)</td><td><strong>caught=true</strong> — verdict <code>fail</code>: reviewer named the root cause (non-2xx still treated as success, so <code>withRetry</code> retries never fire), quoted the README retry spec, showed the new test codifies the wrong contract, and flagged downstream data loss in <code>reporting.mjs</code></td></tr>
+        <tr><td>T2 positive control</td><td>Known-good <code>agent/issue-1</code> (G2's 404 fix)</td><td><strong>passed=true</strong> — verdict <code>pass</code> with root-cause evidence (missing <code>statusCode</code> on <code>InvoiceNotFoundError</code>) and a noted out-of-scope observation (<code>InvalidTransitionError</code> still lacks one)</td></tr>
+        <tr><td>T3 closed loop</td><td>Trap issue #4 through the full chain: webhook → orchestrator → worker → review → gate</td><td><strong>gateHeld=true</strong> in 441s — worker committed a correct fix (reject with <code>HttpError</code> carrying status, bounded timeout, retries actually fire; 20/20 tests), the independent review passed it with evidence + minor concerns, and draft PR <a href="https://github.com/lalanikarim/factory-fixture/pull/9">fixture#9</a> opened. Zero human intervention</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Key design outcome — the gate owns its evidence.</strong> Early runs showed the 27B orchestrator reliably <em>skips</em> an optional <code>review</code> tool step (it went straight to <code>open_draft_pr</code>, and even a refusal message didn't make it retry with review). The fix is structural, not prompt-based: <strong><code>open_draft_pr</code> itself runs the independent reviewer on the committed branch before pushing</strong> and refuses (returning the findings) if the verdict isn't <code>pass</code>. The orchestrator's flow collapses to <code>delegate → open_draft_pr</code>; review can no longer be skipped because it <em>is</em> the merge gate. This mirrors real CI: the check runs at the gate, not as an optional agent step.</p>
+
+  <p><strong>Other findings recorded:</strong> (1) pi-durable <code>PodmanSandboxEnv.exec</code> timeout unit bug — filed upstream as <a href="https://github.com/lalanikarim/engram/issues/14">engram#14</a>, fixed by PR #15; (2) interrupted factory runs leave stuck tasks that stall the scheduler for tens of minutes — G3 T3 now starts from a fresh <code>factory.sqlite</code> each run; (3) the 27B worker on trap issue #4 needs up to ~30 min end-to-end (vs ~7 min on simpler issues) — it explores, dead-ends, and recovers; T3 timeout is 60 min.</p>
 </section>
 
 <!-- 2. GOAL -->
@@ -350,9 +375,9 @@
   <h3>Reuse vs. build new</h3>
   <div class="table-scroll">
     <table>
-      <thead><tr><th>Reuse from <code>../PiDurable/poc</code></th><th>Build new</th></tr></thead>
+      <thead><tr><th>Reuse from <code>../engram/poc</code></th><th>Build new</th></tr></thead>
       <tbody>
-        <tr><td><code>lib/aurora.mjs</code> — local model provider wiring</td><td><code>lib/github.mjs</code> — issue read, branch/commit/push, PR create, comment post tools</td></tr>
+        <tr><td><code>lib/model.mjs</code> — inference host/model wiring (env-driven; was <code>aurora.mjs</code>)</td><td><code>lib/github.mjs</code> — issue read, branch/commit/push, PR create, comment post tools</td></tr>
         <tr><td><code>lib/approvals.mjs</code> — durable approval hook + doc family</td><td>Reviewer role config + verdict schema (<code>structuredOutput</code>)</td></tr>
         <tr><td><code>lib/podman-sandbox.mjs</code> — sandboxed ExecutionEnv</td><td>Evidence packager (diff + test output + transcript excerpts → PR body/comment)</td></tr>
         <tr><td>Subagent fan-out pattern (<code>03-subagents.mjs</code>, <code>lib/worker.mjs</code>)</td><td>Webhook/intake adapter (issue event → <code>submit({requestId: "issue-&lt;n&gt;"})</code>)</td></tr>
@@ -406,7 +431,7 @@
   </div>
 
   <div class="phase">
-    <div class="p-head"><span class="p-num">3</span><h3>Independent reviewer — the negative test matters</h3></div>
+    <div class="p-head"><span class="p-num">3</span><h3>Independent reviewer — the negative test matters <em style="color:var(--ok)">✅ G3 PASS 2026-10-24 — see §1d</em></h3></div>
     <ul>
       <li>Reviewer subagent: own checkout of the worker's branch, read-only tools + <code>bash</code> restricted to the test suite; emits <code>structuredOutput { verdict: pass|fail, evidence[], concerns[] }</code>.</li>
       <li><strong>Negative test (the one that counts):</strong> on the trap issue's worker output → must return <code>fail</code> with a reason pointing at the actual bug, not a superficial complaint.</li>
@@ -459,6 +484,11 @@
       </tbody>
     </table>
   </div>
+
+  <h3>Backlog (tracked tasks)</h3>
+  <ul>
+    <li><s><strong>Inference host / model agnostic wiring.</strong></s> <strong>Done (2026-10-24).</strong> Upstream: <a href="https://github.com/lalanikarim/engram/issues/17">engram#17</a> resolved by PR #18 — <code>poc/lib/model.mjs</code> with env-driven config (<code>PI_PROVIDER_ID</code>, <code>OPENAI_BASE_URL</code>, <code>OPENAI_API_KEY</code>, <code>PI_MODEL_ID</code>; defaults keep historical behavior). Local: <code>factory.mjs</code>, <code>factory-worker.mjs</code>, <code>factory-reviewer.mjs</code>, and the G3 battery now resolve provider/model via <code>localModels()</code>/<code>providerId()</code>/<code>modelId()</code> — no hardcoded provider ids remain in factory code. Switching inference host is now a <code>.env</code> change only; F2's cloud fallback and Phase 6 multi-model sizing are unblocked.</li>
+  </ul>
 </section>
 
 <!-- 7. MEASUREMENT -->
@@ -500,7 +530,7 @@
       </tbody>
     </table>
   </div>
-  <p><strong>Total: ~5–7 focused days</strong>, with roughly 70% of the plumbing already written in <code>../PiDurable/poc</code>. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave. That's tuning work, not building.</p>
+  <p><strong>Total: ~5–7 focused days</strong>, with roughly 70% of the plumbing already written in <code>../engram/poc</code>. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave. That's tuning work, not building.</p>
 </section>
 
 <!-- 9. RISKS -->
@@ -537,7 +567,7 @@
     <table>
       <thead><tr><th>Existing artifact</th><th>Role in this PoC</th></tr></thead>
       <tbody>
-        <tr><td><code>poc/lib/aurora.mjs</code></td><td>Reused as-is (provider wiring + documented gotchas)</td></tr>
+        <tr><td><code>poc/lib/model.mjs</code></td><td>Reused as-is (inference host/model wiring, env-driven; was <code>aurora.mjs</code>)</td></tr>
         <tr><td><code>poc/lib/approvals.mjs</code></td><td>Reused; extended with per-execution approval nonces (§10)</td></tr>
         <tr><td><code>poc/lib/podman-sandbox.mjs</code></td><td>Reused as-is for worker env; reviewer gets a read-only variant</td></tr>
         <tr><td><code>poc/lib/worker.mjs</code>, <code>03-subagents.mjs</code></td><td>Pattern source for orchestrator + role fan-out</td></tr>

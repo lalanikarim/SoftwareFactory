@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-23 · Status: Phases 0–2 complete (G0, G1, G2 passed) · Phases 3–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-24 · Status: Phases 0–3 complete (G0, G1, G2, G3 passed) · Phases 4–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -42,7 +42,7 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
 - Fixture repo: [`lalanikarim/factory-fixture`](https://github.com/lalanikarim/factory-fixture) (private) — dependency-free Node ledger service, 17/17 tests passing. Seeded issues: #1 unknown-id 500→404 (bounded), #2 status filter on `GET /invoices` (bounded feature), #3 `/summary` counts voided invoices (subtle spec violation), #4 `withRetry` never surfaces upstream 5xx errors (**trap** — obvious timeout fix masks the real bug; acceptance requires the surfaced error to carry the HTTP status).
 - Implementation: this repo's [`poc/`](../poc/) — `poc/lib/intake.mjs`, `poc/01-intake-g0.mjs` (Phase 0); Phase 1 wiring (`poc/lib/factory.mjs`, `poc/lib/factory-worker.mjs`, `poc/lib/open-draft-pr.mjs`, `poc/02-orchestration-g1.mjs`) lands in the same PR.
 
-  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The Phase 0 files merged into PiDurable remain there as a harmless duplicate until cleaned up._
+  _Location note (2026-10-23): the PoC code initially landed in `PiDurable/poc-factory` (PRs #3/#7 there); it has been relocated to `SoftwareFactory/poc/` so all factory work lives with its plan and results. The duplicate was later removed upstream. (2026-10-24: the `PiDurable` checkout and repo were renamed to `engram` — [`lalanikarim/engram`](https://github.com/lalanikarim/engram); all shared-lib imports in `poc/` now point at `../engram/poc/lib/`.)_
 
 **Next:** Phase 1 (orchestrator wiring → draft PR). Issues are created *without* the `agent` label; labeling is the intake trigger and should happen only when a phase run is meant to start. Phases 2+ require Aurora (Qwen3.8-27B via Unsloth) available.
 
@@ -84,6 +84,20 @@ Result: [`lalanikarim/factory-fixture#5`](https://github.com/lalanikarim/factory
 Objective checks per issue (no model judgment): suite passes on the branch · every changed file under `src/`, `test/`, or `README.md` (≤ 5 files) · the named behavior verified against a live server from the branch (404 shape, filter semantics incl. 4xx on bogus status, voided exclusion arithmetic) · PR opened by the factory with no subsequent human edits.
 
 **F2 resolved positively:** the local Qwen3.8-27B holds the implementation role for bounded, well-specified issues at a 3/3 acceptance rate — no cloud fallback needed for this class of work. Caveats: fixture issues are bounded and checkable; the trap issue (#4) is deliberately untested here (Phase 3); wall times are webhook→PR on Aurora and feed Phase 6 sizing.
+
+## 1d. Phase 3 results (2026-10-24)
+
+**Gate G3: PASS — 3/3.** Reviewer module (`poc/lib/factory-reviewer.mjs`): a read-only subagent role with only `read`, `git_diff` (host-side), `run_tests` (Podman sandbox, no network), and `submit_verdict`. It judges whether the change *actually* satisfies the issue's acceptance criteria — not merely that tests pass. Battery: `poc/04-reviewer-g3.mjs`.
+
+| Test | Input | Result |
+|---|---|---|
+| T1 negative | Seeded bad branch `agent/issue-4-seeded-bad` (timeout "fix" that resolves with a fake `{error}` object; own suite passes 18/18 — the trap) | **caught=true** — verdict `fail`: reviewer named the root cause (non-2xx still treated as success, so `withRetry` retries never fire), quoted the README retry spec, showed the new test codifies the wrong contract, and flagged downstream data loss in `reporting.mjs` |
+| T2 positive control | Known-good `agent/issue-1` (G2's 404 fix) | **passed=true** — verdict `pass` with root-cause evidence (missing `statusCode` on `InvoiceNotFoundError`) and a noted out-of-scope observation (`InvalidTransitionError` still lacks one) |
+| T3 closed loop | Trap issue #4 through the full chain: webhook → orchestrator → worker → review → gate | **gateHeld=true** in 441s — worker committed a correct fix (reject with `HttpError` carrying status, bounded timeout, retries actually fire; 20/20 tests), the independent review passed it with evidence + minor concerns, and draft PR [fixture#9](https://github.com/lalanikarim/factory-fixture/pull/9) opened. Zero human intervention |
+
+**Key design outcome — the gate owns its evidence.** Early runs showed the 27B orchestrator reliably *skips* an optional `review` tool step (it went straight to `open_draft_pr`, and even a refusal message didn't make it retry with review). The fix is structural, not prompt-based: **`open_draft_pr` itself runs the independent reviewer on the committed branch before pushing** and refuses (returning the findings) if the verdict isn't `pass`. The orchestrator's flow collapses to `delegate → open_draft_pr`; review can no longer be skipped because it *is* the merge gate. This mirrors real CI: the check runs at the gate, not as an optional agent step.
+
+**Other findings recorded:** (1) pi-durable `PodmanSandboxEnv.exec` timeout unit bug — filed upstream as [engram#14](https://github.com/lalanikarim/engram/issues/14), fixed by PR #15; (2) interrupted factory runs leave stuck tasks that stall the scheduler for tens of minutes — G3 T3 now starts from a fresh `factory.sqlite` each run; (3) the 27B worker on trap issue #4 needs up to ~30 min end-to-end (vs ~7 min on simpler issues) — it explores, dead-ends, and recovers; T3 timeout is 60 min.
 
 ## 2. Goal & non-goals
 
@@ -136,9 +150,9 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 ### Reuse vs. build new
 
-| Reuse from `../PiDurable/poc` (as-is or near-as-is) | Build new |
+| Reuse from `../engram/poc` (as-is or near-as-is) | Build new |
 |---|---|
-| `lib/aurora.mjs` — local model provider wiring | `lib/github.mjs` — issue read, branch/commit/push, PR create, comment post tools |
+| `lib/model.mjs` — inference host/model wiring (env-driven; was `aurora.mjs`) | `lib/github.mjs` — issue read, branch/commit/push, PR create, comment post tools |
 | `lib/approvals.mjs` — durable approval hook + doc family | Reviewer role config + verdict schema (`structuredOutput`) |
 | `lib/podman-sandbox.mjs` — sandboxed ExecutionEnv | Evidence packager (diff + test output + transcript excerpts → PR body/comment) |
 | Subagent fan-out pattern (`03-subagents.mjs`, `lib/worker.mjs`) | Webhook/intake adapter (issue event → `submit({requestId: "issue-<n>"})`) |
@@ -183,7 +197,7 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 
 **Gate G2:** **≥ 2 of 3 issues produce a passing, scoped PR with zero human edits.** This acceptance rate is the number that decides whether local models can hold the implementation role.
 
-### Phase 3 — Independent reviewer (negative test matters)
+### Phase 3 — Independent reviewer (negative test matters) ✅ *G3 PASS 2026-10-24 — see §1d*
 
 **Setup.** Reviewer subagent: own checkout of the worker's branch, read-only tools plus `bash` restricted to the test suite; emits `structuredOutput`:
 
@@ -231,6 +245,10 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 | G5 no observable behavior change | Feedback loop stays manual (human updates instructions); the honest claim becomes "durable agent runner with review gates," not "self-improving factory" |
 | Latency/cost in Phase 6 far above toy-battery expectations | Revisit role model assignments and batch cadence before scaling issue volume |
 
+### Backlog (tracked tasks)
+
+- ~~**Inference host / model agnostic wiring.**~~ **Done (2026-10-24).** Upstream: [engram#17](https://github.com/lalanikarim/engram/issues/17) resolved by PR #18 — `poc/lib/model.mjs` with env-driven config (`PI_PROVIDER_ID`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `PI_MODEL_ID`; defaults keep historical behavior). Local: `factory.mjs`, `factory-worker.mjs`, `factory-reviewer.mjs`, and the G3 battery now resolve provider/model via `localModels()`/`providerId()`/`modelId()` — no hardcoded provider ids remain in factory code. Switching inference host is now a `.env` change only; F2's cloud fallback and Phase 6 multi-model sizing are unblocked.
+
 ## 7. Measurement plan
 
 | Metric | Source | Used for |
@@ -256,7 +274,7 @@ All data lives in committed state (transcripts, documents), so the measurement i
 | 5 | Feedback wiring + re-run | 0.5 day |
 | 6 | Metrics extraction + write-up | 0.5 day |
 
-**Total: ~5–7 focused days**, with roughly 70% of the plumbing already written in `../PiDurable/poc`. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave, which is tuning work, not building.
+**Total: ~5–7 focused days**, with roughly 70% of the plumbing already written in `../engram/poc`. The long pole is not code — it's iterating on issue fixtures and role instructions until G2/G3 behave, which is tuning work, not building.
 
 ## 9. Risks (PoC-relevant subset)
 
@@ -273,7 +291,7 @@ All data lives in committed state (transcripts, documents), so the measurement i
 
 | Existing artifact | Role in this PoC |
 |---|---|
-| `poc/lib/aurora.mjs` | Reused as-is (provider wiring + documented gotchas) |
+| `poc/lib/model.mjs` | Reused as-is (inference host/model wiring, env-driven; was `aurora.mjs`) |
 | `poc/lib/approvals.mjs` | Reused; extended with per-execution approval nonces (see §11) |
 | `poc/lib/podman-sandbox.mjs` | Reused as-is for worker env; reviewer gets a read-only variant |
 | `poc/lib/worker.mjs`, `03-subagents.mjs` | Pattern source for orchestrator + role fan-out |

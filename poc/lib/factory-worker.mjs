@@ -17,7 +17,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../../../PiDurable/poc/lib/podman-sandbox.mjs";
+import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -102,7 +102,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
     initial: () => ({ phase: "spawn" }),
     phases: {
       spawn: guarded("SPAWN", async (task, runtime, ctx) => {
-        const { issueNumber, modelId } = task.input;
+        const { issueNumber, provider, modelId } = task.input;
         const token = process.env.FACTORY_GITHUB_TOKEN ?? "";
 
         // Host-side prep (deterministic; re-runs idempotently on resume).
@@ -121,7 +121,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
           // Register BEFORE the conversation can execute anything.
           sandboxRegistry.set(rec.id, sandbox);
           await configure(tx, rec.id, {
-            model: { provider: "aurora", modelId },
+            model: { provider, modelId },
             thinkingLevel: "medium",
             tools,
             instructions: "You are a software factory worker. Follow the working rules given in your task exactly.",
@@ -176,7 +176,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
 /** Orchestrator-facing tool: run the sandboxed worker for one issue.
  * The caller MUST register `taskDef` with the harness registry (extension tasks)
  * or the scheduler will never dispatch it. */
-export function factoryDelegateTool({ taskDef, modelId }) {
+export function factoryDelegateTool({ taskDef, modelRef }) {
   return defineTool({
     name: "delegate",
     description:
@@ -186,7 +186,7 @@ export function factoryDelegateTool({ taskDef, modelId }) {
     execute: async (args, api, ctx) => {
       const id = await api.createTask(
         taskDef,
-        { issueNumber: args.issueNumber, modelId },
+        { issueNumber: args.issueNumber, ...modelRef },
         { ownership: { kind: "task", taskId: api.taskId } },
         ctx,
       );
