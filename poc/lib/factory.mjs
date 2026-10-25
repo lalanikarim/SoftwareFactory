@@ -97,10 +97,10 @@ export async function startFactory({ port = 0, rootDir, dbPath, configPath } = {
   const registry = createRegistry();
   registry.install(CodingTools); // read/write/edit/bash — the worker's role tools
   // The worker task definition MUST be registered for the scheduler to dispatch it.
-  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, testCommand: cfg.testCommand });
+  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, testCommand: cfg.testCommand, setupCommand: cfg.setupCommand });
   const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelRef });
   // Reviewer: independent read-only subagent; its verdict gates PR creation.
-  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo, image: cfg.sandboxImage });
+  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, setupCommand: cfg.setupCommand });
   const reviewerRoleTools = makeReviewerRoleTools({ workDir, testCommand: cfg.testCommand });
   const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef, reviewerTaskDef, testCommand: cfg.testCommand });
   // Phase 4: the merge gate. Single-use durable approvals; the human decides via

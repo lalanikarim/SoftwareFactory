@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
+import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { readLessons } from "./lessons.mjs";
 
 const pExecFile = promisify(execFile);
@@ -93,7 +94,7 @@ async function cleanupSandbox(convId, ctx) {
   }
 }
 
-export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test" }) {
+export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null }) {
   // TEMP(debug): log full stacks for phase faults while G1 is being brought up.
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
@@ -119,6 +120,12 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         // (written by the orchestrator via note_lesson) reach every new worker.
         const lessons = readLessons();
         const ws = await prepareWorkspace({ workDir, fixturesRepo, issueNumber, token });
+
+        // Setup phase (§3.6): dependency installs run in a one-shot
+        // networked container; the agent's own sandbox is then sealed.
+        if (setupCommand) {
+          await runSetupInContainer({ workspace: ws, image, setupCommand });
+        }
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
         // configure() needs tool REGISTRATION objects, not name strings.

@@ -78,7 +78,9 @@ All factories share one inference endpoint (Aurora/llama-server on the RTX 4090)
 
 ### 3.6 Sandbox images & dependency install
 
-Default strategy: **ephemeral setup phase** — the container starts with network, runs the host-defined `setupCommand` (e.g. `npm ci`), then the network is cut before any agent turn. The setup command comes from factory-side config, never from repo content. Optimization (later): per-repo prebuilt images with deps baked in, restoring absolute `network=none`.
+*Status: implemented — `poc/lib/setup-sandbox.mjs`, wired into both worker and reviewer spawn phases.*
+
+Default strategy: **ephemeral setup phase** — a one-shot disposable container runs the host-defined `setupCommand` (e.g. `npm ci`) with egress, then exits; the long-lived agent sandbox is created sealed (`network=none`). Dependency state persists via the host-mounted workspace volume, so the agent never runs in a networked container and the setup command comes from factory-side config, never repo content. Runs are idempotent (re-run on task resume) and fail closed before the agent conversation starts. Optimization (later): per-repo prebuilt images with deps baked in.
 
 ### 3.7 Gates & acceptance criteria
 

@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { PodmanSandboxEnv } from "../../../engram/poc/lib/podman-sandbox.mjs";
+import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { sandboxRegistry } from "./factory-worker.mjs";
 
 const pExecFile = promisify(execFile);
@@ -153,7 +154,7 @@ export function makeReviewerRoleTools({ workDir, testCommand = "node --test" }) 
   return [gitDiff, runTests, submitVerdict];
 }
 
-export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest" }) {
+export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", setupCommand = null }) {
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
       return await fn(task, runtime, ctx);
@@ -174,6 +175,12 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         // Host-side prep (deterministic).
         const issueText = await fetchIssue(fixturesRepo, issueNumber);
         const ws = await prepareReviewWorkspace({ workDir, fixturesRepo, branch, issueNumber });
+
+        // Setup phase (§3.6): the reviewer's sealed sandbox needs the same
+        // dependency install before it can run tests.
+        if (setupCommand) {
+          await runSetupInContainer({ workspace: ws, image, setupCommand });
+        }
 
         const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
         const tools = runtime.registry
