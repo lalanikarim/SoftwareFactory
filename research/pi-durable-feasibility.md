@@ -1,10 +1,10 @@
 # Feasibility Assessment — Building a Software Factory on Pi Durable
 
-_Date: 2026-10-18 · Inputs: `../PiDurable/` (INVESTIGATION.md, PLAN.md, POC-FINDINGS.md, brainstorm-responses.md) + `research/coding-agent-software-factories.md`_
+_Date: 2026-10-18 · Inputs: `../engram/` (INVESTIGATION.md, PLAN.md, POC-FINDINGS.md, brainstorm-responses.md; checkout was `../PiDurable/` until the 2026-10-24 rename) + `research/coding-agent-software-factories.md`_
 
 ## Verdict
 
-**Highly feasible as the foundation for a personal-scale software factory.** Every core factory primitive is a Pi Durable first-class feature, and the PiDurable PoC has already verified — under crash conditions, not just happy paths — nearly all of them. What remains is **glue work** (ticket/PR integration, evidence packaging, CI gating) and two structural risks: **local-model quality on long-horizon coding** and the **experimental API**.
+**Highly feasible as the foundation for a personal-scale software factory.** Every core factory primitive is a Pi Durable first-class feature, and the engram PoC has already verified — under crash conditions, not just happy paths — nearly all of them. What remains is **glue work** (ticket/PR integration, evidence packaging, CI gating) and two structural risks: **local-model quality on long-horizon coding** and the **experimental API**.
 
 The PoC was scoped as a "personal project brain," but its verified capabilities map almost 1:1 onto the software-factory model. In several respects Pi Durable's guarantees (atomic committed state, exactly-once intake, crash-durable approvals) are *stronger* than what commercial factories advertise — notably on **replayability**, which Factory.com lists as a defining factory property and most products only partially deliver.
 
@@ -67,13 +67,13 @@ The PoC was scoped as a "personal project brain," but its verified capabilities 
 | **Single-owner storage** | Low–Medium | One process owns a storage at a time. Fine for one factory on one box; true HA failover needs a custom Postgres backend (small interface + conformance suite provided). PLAN already accepts this trade. |
 | **SQLite last-commit loss on hard power loss** | Low | Worst case: one step reruns — acceptable per PLAN B4. The Phase 2 recovery semantics make this benign in practice. |
 | **Injection resistance is behavioral, not structural** | Medium | Phase 7 probes were blocked, but that's a measured property of this model+prompt, not a guarantee. Factory intake multiplies untrusted-input surface (tickets, issue comments, linked pages). Mitigations already designed: researcher role tool-restricted, `<untrusted>` delimiters, approval gates on all external side effects. |
-| **Scope creep from "brain" to "factory"** | Medium | The PiDurable PLAN is a personal assistant; the factory layer adds GitHub integration, reviewer roles, and evidence packaging. Recommend building the MVP first (it reuses 100% of the same primitives) and treating the factory as Phase B — see §5. |
+| **Scope creep from "brain" to "factory"** | Medium | The engram PLAN is a personal assistant; the factory layer adds GitHub integration, reviewer roles, and evidence packaging. Recommend building the MVP first (it reuses 100% of the same primitives) and treating the factory as Phase B — see §5. |
 
 ---
 
 ## 5. Recommended path
 
-**Phase A — the PiDurable MVP (per existing PLAN.md, ~2 weeks).**
+**Phase A — the engram MVP (per existing PLAN.md, ~2 weeks).**
 Build the brain agent: Telegram + Web UI, web fetch, sandboxed local code gen/test, approval gates. This is not detour work — every primitive it exercises (submissions, SSE, approvals, subagents, sandbox env) is a factory component.
 
 **Phase B — the factory layer (~1–2 weeks of glue).**

@@ -183,7 +183,7 @@
 
   <div class="card">
     <h4>Already proven (do not re-test)</h4>
-    <p style="margin:0">The companion Pi Durable PoC (<code>../engram/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
+    <p style="margin:0">The companion engram PoC (<code>../engram/</code>) verified, under crash conditions: SIGKILL→resume recovery · exactly-once submissions (<code>requestId</code>) · crash-durable approval gates · sandboxed per-conversation execution (Podman) · lossless SSE streaming · subagent fan-out with role-scoped tools · compaction on a local model · 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.</p>
   </div>
 
   <h3>What this PoC exists to test</h3>
@@ -212,7 +212,7 @@
   </div>
 
   <h3>Design decision (F1 resolved)</h3>
-  <p>The adapter is deliberately <strong>stateless w.r.t. retries</strong>: GitHub redeliveries carry new delivery ids but the same issue, so exactly-once holds at the durable server's <code>submit()</code> via the client-chosen <code>requestId</code> (crash-verified in <code>../PiDurable/poc/02-durable.mjs</code>, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.</p>
+  <p>The adapter is deliberately <strong>stateless w.r.t. retries</strong>: GitHub redeliveries carry new delivery ids but the same issue, so exactly-once holds at the durable server's <code>submit()</code> via the client-chosen <code>requestId</code> (crash-verified in <code>../engram/poc/02-durable.mjs</code>, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.</p>
 
   <h3>Artifacts</h3>
   <div class="table-scroll">

@@ -8,7 +8,7 @@ Three prior bodies of work make this plan possible:
 
 1. **The research** established what a software factory is: repeatable intake, governed runtimes, defined stage roles, independent verification, evidence attached to every change, human approval at merge, and a feedback loop that makes the next task better than the last.
 2. **The feasibility assessment** mapped all 11 factory requirements onto Pi Durable primitives and found 9 of them already crash-verified by the companion PoC in `../PiDurable/`.
-3. **The PiDurable PoC** proved the expensive unknowns: SIGKILL→resume recovery, exactly-once submissions (`requestId`), crash-durable approval gates, sandboxed per-conversation execution (Podman), lossless SSE streaming, subagent fan-out with role-scoped tools, compaction on a local model, and a 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.
+3. **The engram PoC** proved the expensive unknowns: SIGKILL→resume recovery, exactly-once submissions (`requestId`), crash-durable approval gates, sandboxed per-conversation execution (Podman), lossless SSE streaming, subagent fan-out with role-scoped tools, compaction on a local model, and a 100%-success benchmark battery on Qwen3.8-27B (IQ3_S GGUF) via Unsloth on an RTX 4090.
 
 **What that PoC did *not* prove — and what this PoC exists to test:**
 
@@ -35,7 +35,7 @@ This PoC deliberately does **not** re-test harness durability, SSE reconnect, sa
 7. JSONL audit log records every event with delivery id + requestId (replayable intake).
 8. Pure intake helpers behave as specified.
 
-**Design decision (F1 resolved):** the adapter is deliberately stateless w.r.t. retries — dedup happens at the durable server's `submit()` via the client-chosen `requestId` (crash-verified in `../PiDurable/poc/02-durable.mjs`, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.
+**Design decision (F1 resolved):** the adapter is deliberately stateless w.r.t. retries — dedup happens at the durable server's `submit()` via the client-chosen `requestId` (crash-verified in `../engram/poc/02-durable.mjs`, PHASE2-DUP). The adapter keeps a JSONL audit log for replayability rather than its own dedup state.
 
 **Artifacts:**
 
