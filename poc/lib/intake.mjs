@@ -9,6 +9,7 @@
 // delimiters with an explicit do-not-follow wrapper outside them.
 
 import http from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -67,11 +68,37 @@ export async function handleIntakeEvent(event, { dispatch }) {
 }
 
 /**
+ * Verify GitHub's X-Hub-Signature-256 header against the raw request body.
+ * Constant-time comparison; fails closed on any mismatch (missing header,
+ * wrong prefix, wrong length, wrong digest).
+ */
+export function verifyGitHubSignature({ signatureHeader, rawBody, secret }) {
+  if (!secret) return false;
+  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(signatureHeader ?? "", "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
  * Start the intake HTTP server. POST /webhook/github accepts GitHub issue
  * events (X-GitHub-Event: issues). Each event is appended to logPath as a
  * JSONL audit line so intake is replayable.
+ *
+ * Security posture:
+ *   - host !== 127.0.0.1 REQUIRES webhookSecret — the server refuses to start
+ *     otherwise (a reachable, unauthenticated intake endpoint is an injection
+ *     surface: anyone could submit arbitrary "work" content).
+ *   - When webhookSecret is set, every request must carry a valid
+ *     X-Hub-Signature-256 or it is rejected with 403 before parsing.
+ *   - Loopback without a secret is local-development mode only (the G0
+ *     battery); it is never acceptable for a reachable endpoint.
  */
-export function startIntakeServer({ port = 0, dispatch, logPath }) {
+export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret, dispatch, logPath }) {
+  if (host !== "127.0.0.1" && !webhookSecret) {
+    throw new Error(`refusing to bind ${host} without a webhook secret — set GITHUB_WEBHOOK_SECRET`);
+  }
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method !== "POST" || new URL(req.url, "http://localhost").pathname !== "/webhook/github") {
@@ -80,9 +107,30 @@ export function startIntakeServer({ port = 0, dispatch, logPath }) {
       }
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
+      const rawBody = Buffer.concat(chunks);
+
+      // Signature check happens BEFORE parsing: an unauthenticated body must
+      // never reach dispatch, even as data.
+      if (webhookSecret) {
+        const valid = verifyGitHubSignature({
+          signatureHeader: req.headers["x-hub-signature-256"],
+          rawBody,
+          secret: webhookSecret,
+        });
+        if (!valid) {
+          const line = { deliveryId: req.headers["x-github-delivery"] ?? null, accepted: false, reason: "invalid signature", ts: new Date().toISOString() };
+          if (logPath) {
+            await mkdir(dirname(logPath), { recursive: true });
+            await appendFile(logPath, JSON.stringify(line) + "\n");
+          }
+          res.writeHead(403, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "invalid signature" }));
+        }
+      }
+
       let event;
       try {
-        event = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        event = JSON.parse(rawBody.toString("utf8"));
       } catch {
         res.writeHead(400, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "invalid JSON body" }));
@@ -109,6 +157,6 @@ export function startIntakeServer({ port = 0, dispatch, logPath }) {
     }
   });
   return new Promise((resolve) => {
-    server.listen(port, "127.0.0.1", () => resolve({ server, port: server.address().port }));
+    server.listen(port, host, () => resolve({ server, port: server.address().port, host }));
   });
 }

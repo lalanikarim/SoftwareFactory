@@ -6,7 +6,7 @@ Implementation for [research/poc-plan-factory.md](../research/poc-plan-factory.m
 
 | Phase | Gate | Status |
 |---|---|---|
-| 0 — Fixture & intake wiring | G0: exactly-once intake under simulated retry; untrusted delimiting | **PASS** (`node 01-intake-g0.mjs`, 8/8 checks, no GPU needed) |
+| 0 — Fixture & intake wiring | G0: exactly-once intake under simulated retry; untrusted delimiting | **PASS** (`node 01-intake-g0.mjs`, 13/13 checks incl. webhook signature verification, no GPU needed) |
 | 1 — Intake & orchestration | G1: issue → draft PR unattended | **PASS** (`node 02-orchestration-g1.mjs`) — issue #3 → draft PR in 361s, zero intervention (needs Aurora + factory-sandbox image) |
 | 2 — Worker quality | G2: ≥ 2/3 bounded issues produce passing, scoped PRs | **PASS** — 3/3 (`node 03-worker-quality-g2.mjs`), zero human edits; see plan doc §1c |
 | 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | **PASS** — 3/3 (`node 04-reviewer-g3.mjs`); gate owns its evidence, closed loop on #4 → draft PR in 441s |
@@ -29,8 +29,8 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 
 | File | Purpose |
 |---|---|
-| `lib/intake.mjs` | Webhook event → `{ requestId: "issue-<n>", content }`; `<untrusted>` delimiting + trusted directive line; JSONL audit log; HTTP server (`POST /webhook/github`) |
-| `01-intake-g0.mjs` | G0 battery (in-process stub factory with exactly-once semantics) + `serve` mode for live wiring to a real `/tasks` endpoint |
+| `lib/intake.mjs` | Webhook event → `{ requestId: "issue-<n>", content }`; `<untrusted>` delimiting + trusted directive line; JSONL audit log; HTTP server (`POST /webhook/github`) with `X-Hub-Signature-256` verification (constant-time, checked before parsing) and fail-closed host binding |
+| `01-intake-g0.mjs` | G0 battery (in-process stub factory with exactly-once semantics; incl. signature checks: valid/missing/wrong/tampered) + `serve` mode for live wiring to a real `/tasks` endpoint (`--host`, secret from `GITHUB_WEBHOOK_SECRET`) |
 | `lib/factory.mjs` | Factory process: durable harness + root orchestrator conversation + HTTP surface (`POST /tasks`, `GET /health`, `GET/POST /approvals`, `GET /tool-results`, `GET /lessons`). Orchestrator tools: `delegate`, `open_draft_pr`, `merge_pr`, `note_lesson` |
 | `lib/factory-worker.mjs` | `factory.worker` durable task: host-side issue fetch (`gh api`) + fresh clone on `agent/issue-<n>` + per-conversation Podman sandbox; deterministic worker prompt (issue text inside `<untrusted>`) |
 | `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite; assembles the full evidence body (diff summary, reviewer verdict, test counts, worker report) and refreshes it on existing PRs. Never merges — Phase 4 owns merging |
@@ -47,6 +47,8 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 ## Design decisions (Phase 1)
 
 - **Stateless adapter, dedup at the durable server.** GitHub redeliveries carry new `X-GitHub-Delivery` ids but the same issue, so `requestId = "issue-<n>"` makes exactly-once hold at the durable server's `submit()` (crash-verified in `../engram/poc/02-durable.mjs`). The adapter keeps a JSONL audit log for replayability.
+- **Webhook signature verification is mandatory off-loopback.** An unauthenticated intake endpoint reachable from the network is an injection surface — anyone could submit arbitrary "work" content. So: when `webhookSecret` is set, every request must carry a valid `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, constant-time compare, checked **before** JSON parsing; failures are 403 + audit line); binding any non-loopback host without a secret refuses to start. Loopback without a secret is local-development mode only (the G0 battery). In production the adapter sits behind a TLS-terminating reverse proxy; the signature check authenticates GitHub even if TLS is terminated elsewhere.
+  - **Secrets are per-repo, never global.** Each repo's GitHub webhook carries its own secret and each factory verifies with exactly that one — a leak compromises only that repo's intake. When multi-repo mode arrives (one adapter fronting many factories), the adapter will hold a `repo full_name → {secret, /tasks target}` map and verification stays **pre-parse**: the raw body is HMAC-checked against each configured secret in constant time, and the matching secret determines routing — so an event signed with repo A's secret but naming repo B is rejected (403 + audit line), and signature validity doubles as per-repo authorization (spec: `../research/multi-repo-factory-plan.md` §3.2). Org-level webhooks (one secret for all repos) are deliberately avoided: one leak would forge work submissions into every factory.
 - **Credentials stay on the host.** The sandbox gets no env vars and network=none. The clone is prepared host-side (token in the clone URL only during clone, then scrubbed from `.git/config`); the worker prompt forbids pushes; `open_draft_pr` does all GitHub writes from the host with stored `gh` auth or `FACTORY_GITHUB_TOKEN`.
 - **Deterministic issue flow.** The orchestrator never handles raw issue text — it reads only the trusted directive line (`Work on GitHub issue number: N`) and calls `delegate({issueNumber})`. The worker task fetches the issue itself via `gh api` and renders it inside `<untrusted>` in its prompt. This minimizes model judgment in the wiring; planning quality is exercised in Phases 2/5.
 - **Worker sandbox per run.** One Podman container per worker conversation (registry keyed by conversation id, routed via the harness `env()` callback), torn down when the task settles.
@@ -62,6 +64,10 @@ cp .env.example .env   # then fill in
 podman build -t factory-sandbox:latest sandbox-image/
 
 node 01-intake-g0.mjs                                # G0 battery (no GPU)
+# Live adapter: loopback dev mode (no signature check — do not expose):
+node 01-intake-g0.mjs serve --port 9475 --target http://127.0.0.1:8787/tasks
+# Reachable endpoint: non-loopback bind REQUIRES GITHUB_WEBHOOK_SECRET (same value in the GitHub webhook config), behind a TLS-terminating proxy:
+GITHUB_WEBHOOK_SECRET=... node 01-intake-g0.mjs serve --host 0.0.0.0 --port 9475 --target http://127.0.0.1:8787/tasks
 node lib/factory.mjs 9600                            # standalone factory process
 node 02-orchestration-g1.mjs --issue 3               # G1 end-to-end (needs Aurora + image)
 node 02-orchestration-g1.mjs --issue 3 --request-id issue-3-dev-<ts>   # dev re-run after a failed attempt
