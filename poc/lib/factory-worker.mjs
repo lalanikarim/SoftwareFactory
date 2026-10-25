@@ -17,13 +17,13 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../vendor/engram/poc/lib/podman-sandbox.mjs";
+import { SupervisedPodmanSandbox, watchSandboxHealth } from "./sandbox-health.mjs";
 import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { readLessons } from "./lessons.mjs";
 
 const pExecFile = promisify(execFile);
 
-/** convId -> PodmanSandboxEnv (read by the harness env() callback). */
+/** convId -> SupervisedPodmanSandbox (read by the harness env() callback). */
 export const sandboxRegistry = new Map();
 
 async function sh(cmd, args, opts = {}) {
@@ -144,7 +144,9 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
           await runSetupInContainer({ workspace: ws, image, setupCommand });
         }
 
-        const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
+        // Supervised: a dead engram-sbx-* container is detected and recreated
+        // on the next exec instead of causing silent agent retry loops (#20).
+        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none" });
         // configure() needs tool REGISTRATION objects, not name strings.
         const tools = runtime.registry
           .installed()
@@ -179,41 +181,50 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("worker conversation missing");
 
-        // M4: host-side wall-clock budget. The partial branch stays on disk
-        // for the stale-branch rework path; the overrun is recorded in the
-        // task outcome and the audit log.
-        const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
-        if (waitResult === "overrun") {
-          console.error(`[factory.worker] BUDGET: issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting run; partial branch preserved`);
-          try { await handle.abort(ctx); } catch (e) { console.error(`[factory.worker] budget abort: ${e.message}`); }
-          await cleanupSandbox(convId, ctx);
-          await runtime.commit(
-            () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
-            ctx,
-          );
-          return;
-        }
-
-        let answer = "";
-        const view = await runtime.context(convId, ctx);
-        for (const m of [...view.messages].reverse()) {
-          if (m.role !== "assistant") continue;
-          const text = m.content.filter((c) => c.type === "text").map((c) => c.text).join(" ").trim();
-          if (text) {
-            answer = text;
-            break;
+        // Issue #20: supervise the sandbox while waiting — a dead container is
+        // detected and recreated on a fixed poll, not only when the agent's
+        // next exec happens to hit it.
+        const sandbox = sandboxRegistry.get(convId);
+        const stopWatch = sandbox ? watchSandboxHealth(sandbox) : () => {};
+        try {
+          // M4: host-side wall-clock budget. The partial branch stays on disk
+          // for the stale-branch rework path; the overrun is recorded in the
+          // task outcome and the audit log.
+          const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
+          if (waitResult === "overrun") {
+            console.error(`[factory.worker] BUDGET: issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting run; partial branch preserved`);
+            try { await handle.abort(ctx); } catch (e) { console.error(`[factory.worker] budget abort: ${e.message}`); }
+            await cleanupSandbox(convId, ctx);
+            await runtime.commit(
+              () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
+              ctx,
+            );
+            return;
           }
+
+          let answer = "";
+          const view = await runtime.context(convId, ctx);
+          for (const m of [...view.messages].reverse()) {
+            if (m.role !== "assistant") continue;
+            const text = m.content.filter((c) => c.type === "text").map((c) => c.text).join(" ").trim();
+            if (text) {
+              answer = text;
+              break;
+            }
+          }
+          // Tear down the container once the run is settled.
+          await cleanupSandbox(convId, ctx);
+          if (answer === "") {
+            await runtime.commit(
+              () => ({ status: "completing", outcome: { status: "failed", error: { message: "worker produced no final answer" } } }),
+              ctx,
+            );
+            return;
+          }
+          await runtime.commit(() => ({ status: "completing", outcome: { status: "completed", result: { answer } } }), ctx);
+        } finally {
+          stopWatch();
         }
-        // Tear down the container once the run is settled.
-        await cleanupSandbox(convId, ctx);
-        if (answer === "") {
-          await runtime.commit(
-            () => ({ status: "completing", outcome: { status: "failed", error: { message: "worker produced no final answer" } } }),
-            ctx,
-          );
-          return;
-        }
-        await runtime.commit(() => ({ status: "completing", outcome: { status: "completed", result: { answer } } }), ctx);
       }),
       abort: guarded("ABORT", async (task, runtime, ctx) => {
         await cleanupSandbox(task.state.checkpoint?.convId, ctx);

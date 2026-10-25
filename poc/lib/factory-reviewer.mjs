@@ -19,7 +19,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { PodmanSandboxEnv } from "../vendor/engram/poc/lib/podman-sandbox.mjs";
+import { SupervisedPodmanSandbox, watchSandboxHealth } from "./sandbox-health.mjs";
 import { runSetupInContainer } from "./setup-sandbox.mjs";
 import { sandboxRegistry, awaitIdleWithinBudget } from "./factory-worker.mjs";
 
@@ -33,7 +33,7 @@ async function sh(cmd, args, opts = {}) {
  *  Keyed by conversation because api.taskId inside a tool call is the internal
  *  pi.tool task, not the owning factory.reviewer task. */
 export const verdictRegistry = new Map();
-/** conversationId -> PodmanSandboxEnv for run_tests (api.taskId inside a tool call
+/** conversationId -> SupervisedPodmanSandbox for run_tests (api.taskId inside a tool call
  *  is the internal pi.tool task, not the owning factory.reviewer task). */
 const reviewerSandboxByConv = new Map();
 
@@ -183,7 +183,9 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
           await runSetupInContainer({ workspace: ws, image, setupCommand });
         }
 
-        const sandbox = new PodmanSandboxEnv({ workspace: ws, image, network: "none" });
+        // Supervised: a dead engram-sbx-* container is detected and recreated
+        // on the next exec instead of causing silent agent retry loops (#20).
+        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none" });
         const tools = runtime.registry
           .installed()
           .flatMap((e) => e.tools ?? [])
@@ -217,41 +219,49 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("reviewer conversation missing");
 
-        // M4: same host-side wall-clock budget as the worker — a stuck review
-        // must not hold the factory's single concurrency slot forever.
-        const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
-        if (waitResult === "overrun") {
-          console.error(`[factory.reviewer] BUDGET: review of issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting review`);
-          try { await handle.abort(ctx); } catch (e) { console.error(`[factory.reviewer] budget abort: ${e.message}`); }
+        // Issue #20: supervise the sandbox while waiting — a dead container is
+        // detected and recreated on a fixed poll, not only when run_tests hits it.
+        const watched = sandboxRegistry.get(convId);
+        const stopWatch = watched ? watchSandboxHealth(watched) : () => {};
+        try {
+          // M4: same host-side wall-clock budget as the worker — a stuck review
+          // must not hold the factory's single concurrency slot forever.
+          const waitResult = await awaitIdleWithinBudget(handle, ctx, wallSecsPerIssue);
+          if (waitResult === "overrun") {
+            console.error(`[factory.reviewer] BUDGET: review of issue #${task.input.issueNumber} exceeded wallSecsPerIssue=${wallSecsPerIssue}s — aborting review`);
+            try { await handle.abort(ctx); } catch (e) { console.error(`[factory.reviewer] budget abort: ${e.message}`); }
+            reviewerSandboxByConv.delete(convId);
+            const sandbox = sandboxRegistry.get(convId);
+            if (sandbox) {
+              await sandbox.cleanup(ctx);
+              sandboxRegistry.delete(convId);
+            }
+            await runtime.commit(
+              () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
+              ctx,
+            );
+            return;
+          }
+
           reviewerSandboxByConv.delete(convId);
           const sandbox = sandboxRegistry.get(convId);
           if (sandbox) {
             await sandbox.cleanup(ctx);
             sandboxRegistry.delete(convId);
           }
-          await runtime.commit(
-            () => ({ status: "completing", outcome: { status: "aborted", reason: `wall-clock budget exceeded (${wallSecsPerIssue}s)` } }),
-            ctx,
-          );
-          return;
+          const verdict = verdictRegistry.get(convId);
+          verdictRegistry.delete(convId);
+          if (!verdict) {
+            await runtime.commit(
+              () => ({ status: "completing", outcome: { status: "failed", error: { message: "reviewer never called submit_verdict" } } }),
+              ctx,
+            );
+            return;
+          }
+          await runtime.commit(() => ({ status: "completing", outcome: { status: "completed", result: verdict } }), ctx);
+        } finally {
+          stopWatch();
         }
-
-        reviewerSandboxByConv.delete(convId);
-        const sandbox = sandboxRegistry.get(convId);
-        if (sandbox) {
-          await sandbox.cleanup(ctx);
-          sandboxRegistry.delete(convId);
-        }
-        const verdict = verdictRegistry.get(convId);
-        verdictRegistry.delete(convId);
-        if (!verdict) {
-          await runtime.commit(
-            () => ({ status: "completing", outcome: { status: "failed", error: { message: "reviewer never called submit_verdict" } } }),
-            ctx,
-          );
-          return;
-        }
-        await runtime.commit(() => ({ status: "completing", outcome: { status: "completed", result: verdict } }), ctx);
       }),
       abort: guarded("ABORT", async (task, runtime, ctx) => {
         const convId = task.state.checkpoint?.convId;
