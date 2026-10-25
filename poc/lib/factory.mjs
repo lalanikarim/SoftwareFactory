@@ -21,6 +21,7 @@ import { factoryDelegateTool, factoryWorkerTask, sandboxRegistry } from "./facto
 import { factoryReviewerTask, makeReviewerRoleTools } from "./factory-reviewer.mjs";
 import { openDraftPrTool } from "./open-draft-pr.mjs";
 import { MERGE_TOOL, MergeApprovalDoc, mergePrTool, findPendingMergeApprovals } from "./merge-gate.mjs";
+import { noteLessonTool, readLessons } from "./lessons.mjs";
 
 const ctx = BACKGROUND_CONTEXT;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -59,8 +60,11 @@ export const ORCHESTRATOR_INSTRUCTIONS = [
   "5. If open_draft_pr succeeds (it returns prUrl), call merge_pr with { issueNumber: N }.",
   "6. If merge_pr returns REQUIRES APPROVAL, do NOT retry it. Your final answer must state the draft PR URL and the approval key exactly as given, and say that a human must approve that key before the merge can run.",
   "7. If merge_pr reports merged or alreadyMerged, your final answer must state the PR URL and the merge commit.",
+  "8. Whenever open_draft_pr returns a refusal with review findings, FIRST call note_lesson with { lesson: '<one imperative sentence generalizing the finding so future workers avoid the same mistake; you may mention issue #N>' }, THEN present the finding (verdict JSON plus the reviewer's concerns) in your final answer.",
   "",
-  `Use only the delegate, open_draft_pr, and ${MERGE_TOOL} tools. Do not edit files yourself.`,
+  "Standing lessons recorded by note_lesson are read by every future worker before it starts. Record at most one lesson per refused review, and only when the finding generalizes beyond this single issue.",
+  "",
+  `Use only the delegate, open_draft_pr, ${MERGE_TOOL}, and note_lesson tools. Do not edit files yourself.`,
 ].join("\n");
 
 export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
@@ -89,10 +93,13 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
   // Phase 4: the merge gate. Single-use durable approvals; the human decides via
   // POST /approvals below — the agent can never self-approve.
   const mergePr = mergePrTool({ fixturesRepo, ghToken });
+  // Phase 5: feedback loop. The orchestrator distills review findings into
+  // standing lessons; every future worker reads them at spawn.
+  const noteLesson = noteLessonTool();
   registry.install(
     defineExtension({
       name: "factory",
-      tools: [delegate, openDraftPr, mergePr, ...reviewerRoleTools],
+      tools: [delegate, openDraftPr, mergePr, noteLesson, ...reviewerRoleTools],
       tasks: [workerTaskDef, reviewerTaskDef],
     }),
   );
@@ -119,7 +126,7 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
     agent: {
       model: modelRef,
       thinkingLevel: "medium",
-      tools: [delegate, openDraftPr, mergePr],
+      tools: [delegate, openDraftPr, mergePr, noteLesson],
       instructions: ORCHESTRATOR_INSTRUCTIONS,
     },
   });
@@ -149,6 +156,29 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
         const sub = await rootConv.submit({ type: "input", content, requestId }, ctx);
         res.writeHead(202, { "content-type": "application/json" });
         return res.end(JSON.stringify({ accepted: true, requestId, submissionId: sub.id ?? null }));
+      }
+      if (req.method === "GET" && url.pathname === "/tool-results") {
+        // Observability for batteries/drivers: the root conversation's recent
+        // tool results (name + output tail), newest first.
+        const n = Math.min(Number(url.searchParams.get("n") ?? 20) || 20, 100);
+        const page = await harness.commit((tx) => tx.scanEntries({ conversationId: rootConv.id }, 300), ctx);
+        const all = [];
+        for (const item of page.items) {
+          if ((item.kind ?? "") !== "pi.tool-result") continue;
+          const msg = Array.isArray(item.model) ? item.model[0] : undefined;
+          if (!msg) continue;
+          const text = (msg.content ?? [])
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("\n");
+          all.push({ toolName: msg.toolName, isError: !!msg.isError, text: text.slice(0, 1200) });
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ results: all.slice(-n).reverse() }));
+      }
+      if (req.method === "GET" && url.pathname === "/lessons") {
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        return res.end(readLessons());
       }
       if (req.method === "GET" && url.pathname === "/approvals") {
         const approvals = await findPendingMergeApprovals(harness, rootConv.id, ctx);

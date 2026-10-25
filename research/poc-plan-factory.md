@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-25 · Status: Phases 0–4 complete (G0, G1, G2, G3, G4 passed) · Phases 5–6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-25 · Status: Phases 0–5 complete (G0, G1, G2, G3, G4, G5 passed) · Phase 6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -115,6 +115,27 @@ Objective checks per issue (no model judgment): suite passes on the branch · ev
 **Findings recorded during the gate:** (1) GitHub refuses to merge draft PRs — `merge_pr` converts draft → ready (`gh pr ready`) as part of the approved merge action (approval implies review is done); (2) deleting a remote branch auto-closes the open PR tracking it — the stale-branch retry path now uses `--force-with-lease` on our own factory-owned `agent/issue-*` branch instead of delete + re-push, preserving PR continuity (shared branches are still never touched); (3) stale branches conflict with main (`mergeStateStatus=DIRTY`) — `merge_pr` detects this and returns a rework directive instead of attempting a merge; the battery's `G4_MODE=work` exercises the full rework chain (worker re-implements on current main → force-with-lease update → review → merge); (4) new fixture issue #11 (`POST /invoices` 500→400 on invalid bodies) was seeded and resolved through the factory, leaving a fresh bounded issue trail for Phase 5's feedback-loop re-run.
 
 **F4 resolved positively:** the merge approval gate executes the merge exactly once across a mid-approval SIGKILL, with real git side effects on a real repo.
+
+## 1f. Phase 5 results (2026-10-25)
+
+**Gate G5: PASS** — one verifiable instance of "the same mistake doesn't recur" (`poc/06-feedback-g5.mjs`; results in `poc/data/g5-results.json`).
+
+**Anchor finding (from a real prior run).** On issue #11 ([PR #12](https://github.com/lalanikarim/factory-fixture/pull/12)) the worker fixed "validation errors surface as 500" with a **handler-level patch**: `catch` + `instanceof TypeError` + re-throw with `statusCode: 400` in the route handler, instead of giving the error class a `statusCode` the way `InvoiceNotFoundError` already has. The independent reviewer flagged exactly this fragility ("if store.add ever throws a non-TypeError validation error … it would again surface as 500").
+
+**Similar issue for the re-run.** Seeded fixture [issue #13](https://github.com/lalanikarim/factory-fixture/issues/13): invalid status transitions return 500 (`InvalidTransitionError` has no `statusCode`) against the README's 4xx spec. The naive fix is the same handler-level patch; the corrected behavior is a root-level fix.
+
+**Mechanism.** A durable **lessons document** (host-side file, so it outlives per-run sqlite databases) plus an orchestrator tool `note_lesson` that appends one distilled lesson per review finding. Every worker prompt now includes the lessons in a trusted section outside `<untrusted>` — host-side at spawn, deterministic. The battery acts as the human driver: if the orchestrator does not record the lesson itself (its standing instruction says to do so on every refused review), the battery submits a trusted instruction to record it and counts that as an intervention.
+
+| Arm | Lessons active | Review | Fix pattern (objective diff check) |
+|---|---|---|---|
+| A — baseline | no | PASS ([PR #14](https://github.com/lalanikarim/factory-fixture/pull/14)) | **handler patch** — `catch` + `instanceof InvalidTransitionError` / `instanceof TypeError` re-thrown with statusCode in the route handler (the exact #11 pattern) |
+| B — re-run, same issue | yes | PASS (same PR, refreshed) | **root fix** — `this.statusCode = 409` added to the `InvalidTransitionError` class; no handler patch |
+
+Lesson recorded (via `note_lesson`, human-driver intervention in arm A since both arms passed review so the refusal-triggered path was not exercised): *"Fix error-status bugs at the root: give the thrown error class a statusCode property (as InvoiceNotFoundError does for issue #11), not an instanceof/catch-and-rethrow patch in the route handler."*
+
+**Attribution: strong** — the baseline arm exhibited the mistake that then did not recur after the lesson was recorded. **Caveats, stated honestly:** (1) single trial per arm — this establishes one verifiable instance, not statistical reliability of the loop; (2) the orchestrator's *autonomous* lesson-distillation path (refusal → `note_lesson`) was not exercised because both arms passed review — the recording in arm A came from the human-driver fallback; (3) fix-pattern classification is a diff heuristic; raw diff excerpts are preserved in `g5-results.json` for human verification. The first battery run had bookkeeping bugs (orphaned factory holding the port; lesson file path mismatch) but showed the identical A→B behaviorally; the canonical rerun above is the recorded result.
+
+**G5 closes the loop claim:** with a durable lessons document feeding every worker prompt, a concrete reviewer finding from a prior run was recorded and the same mistake did not recur on an analogous issue. The factory now has all five behavioral gates (G0–G5); only Phase 6 (measurement & sizing) remains before the PoC is complete.
 
 ## 2. Goal & non-goals
 
