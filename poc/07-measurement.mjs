@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadDotEnv } from "./vendor/engram/poc/lib/env.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = join(__dirname, "data");
@@ -123,6 +124,7 @@ function extractDb(path) {
 }
 
 function main() {
+  loadDotEnv(); // pick up PI_MODEL_ID / endpoint config from poc/.env when present
   const runs = [];
   for (const file of readdirSync(dataDir).filter((f) => f.endsWith(".sqlite") && !SKIP_DBS.has(f)).sort()) {
     const label = file.replace(/\.sqlite$/, "");
@@ -153,7 +155,9 @@ function main() {
     { label: "g2-battery", note: "G2 — issues #1/#2/#3 evaluated against existing draft PRs (no fresh databases)", outcome: "PASS 3/3, zero human edits" },
   ];
 
-  const metrics = { date: new Date().toISOString(), model: "aurora/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF (local, $0)", runs, documented };
+  // Model identity from env/config (PI_MODEL_ID via poc/.env), not a hardcoded host/model string.
+  const model = process.env.PI_MODEL_ID ? `${process.env.PI_MODEL_ID} (local, $0)` : "local model ($0)";
+  const metrics = { date: new Date().toISOString(), model, runs, documented };
   writeFileSync(join(dataDir, "phase6-metrics.json"), JSON.stringify(metrics, null, 2));
 
   // Console table.
