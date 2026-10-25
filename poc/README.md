@@ -7,10 +7,10 @@ Implementation for [research/poc-plan-factory.md](../research/poc-plan-factory.m
 | Phase | Gate | Status |
 |---|---|---|
 | 0 — Fixture & intake wiring | G0: exactly-once intake under simulated retry; untrusted delimiting | **PASS** (`node 01-intake-g0.mjs`, 8/8 checks, no GPU needed) |
-| 1 — Intake & orchestration | G1: issue → draft PR unattended | wiring complete — `node 02-orchestration-g1.mjs` (needs Aurora + factory-sandbox image) |
+| 1 — Intake & orchestration | G1: issue → draft PR unattended | **PASS** (`node 02-orchestration-g1.mjs`) — issue #3 → draft PR in 361s, zero intervention (needs Aurora + factory-sandbox image) |
 | 2 — Worker quality | G2: ≥ 2/3 bounded issues produce passing, scoped PRs | **PASS** — 3/3 (`node 03-worker-quality-g2.mjs`), zero human edits; see plan doc §1c |
-| 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | pending |
-| 4 — Evidence & human checkpoint | G4: exactly-once merge across crash | pending |
+| 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | **PASS** — 3/3 (`node 04-reviewer-g3.mjs`); gate owns its evidence, closed loop on #4 → draft PR in 441s |
+| 4 — Evidence & human checkpoint | G4: exactly-once merge across crash | **PASS** (`node 05-merge-gate-g4.mjs`, T1 143s / T2 144s): evidence complete on PR; single-use durable approvals; SIGKILL while approval pending → restart → approve → exactly one merge commit |
 | 5 — Feedback loop | G5: one verifiable "same mistake doesn't recur" | pending |
 | 6 — Measurement & sizing | (no gate) | pending |
 
@@ -33,9 +33,12 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 | `01-intake-g0.mjs` | G0 battery (in-process stub factory with exactly-once semantics) + `serve` mode for live wiring to a real `/tasks` endpoint |
 | `lib/factory.mjs` | Factory process: durable harness + root orchestrator conversation + `POST /tasks` / `GET /health`. Orchestrator gets exactly two tools: `delegate`, `open_draft_pr` |
 | `lib/factory-worker.mjs` | `factory.worker` durable task: host-side issue fetch (`gh api`) + fresh clone on `agent/issue-<n>` + per-conversation Podman sandbox; deterministic worker prompt (issue text inside `<untrusted>`) |
-| `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite and records it in the PR body. Never merges — Phase 4 owns merging |
+| `lib/open-draft-pr.mjs` | Host-side push + DRAFT PR creation (idempotent by head branch); host-verifies the test suite; assembles the full evidence body (diff summary, reviewer verdict, test counts, worker report) and refreshes it on existing PRs. Never merges — Phase 4 owns merging |
+| `lib/merge-gate.mjs` | Phase 4 merge gate: approval-gated `gh pr merge` with single-use durable approvals (`factory.merge-approval` doc family); pending-approval transcript scan for the `/approvals` endpoint |
 | `02-orchestration-g1.mjs` | G1 end-to-end: preflight → factory + intake adapter → simulated webhook delivery → poll for draft PR (objective check) |
 | `03-worker-quality-g2.mjs` | G2 battery: run issues end-to-end (or evaluate existing draft PRs with `--allow-existing`) + objective checks (suite, diff scope, live-server behavior, zero human edits); results to `data/g2-results.json` |
+| `04-reviewer-g3.mjs` | G3 battery: seeded-bad trap caught, known-good passed, closed loop on the trap issue through review gate → draft PR; results to `data/g3-results.json` |
+| `05-merge-gate-g4.mjs` | G4 battery: factory as child process; merge directive → review gate → evidence check → approve via `/approvals` → retry → exactly-one-merge verification; T2 adds SIGKILL while approval pending + restart over the same db; results to `data/g4-results.json`. **Merges the target draft PRs on the fixture repo** |
 | `sandbox-image/Dockerfile` | Worker sandbox image: `node:24-alpine` + git. Build: `podman build -t factory-sandbox:latest poc/sandbox-image/` |
 
 ## Design decisions (Phase 1)
@@ -44,7 +47,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 - **Credentials stay on the host.** The sandbox gets no env vars and network=none. The clone is prepared host-side (token in the clone URL only during clone, then scrubbed from `.git/config`); the worker prompt forbids pushes; `open_draft_pr` does all GitHub writes from the host with stored `gh` auth or `FACTORY_GITHUB_TOKEN`.
 - **Deterministic issue flow.** The orchestrator never handles raw issue text — it reads only the trusted directive line (`Work on GitHub issue number: N`) and calls `delegate({issueNumber})`. The worker task fetches the issue itself via `gh api` and renders it inside `<untrusted>` in its prompt. This minimizes model judgment in the wiring; planning quality is exercised in Phases 2/5.
 - **Worker sandbox per run.** One Podman container per worker conversation (registry keyed by conversation id, routed via the harness `env()` callback), torn down when the task settles.
-- **Branch retry path.** If a crashed prior attempt left a diverged remote `agent/issue-<n>` branch, `open_draft_pr` deletes *that branch only* and re-pushes — never force-pushes shared history.
+- **Branch retry path.** If a prior attempt left a diverged remote `agent/issue-<n>` branch, `open_draft_pr` replaces it with `--force-with-lease` — only our own factory-owned branch is ever forced, and the lease refuses to clobber anything unfetched. (Deleting the branch first would auto-close the open PR tracking it, breaking PR continuity.) Shared branches are never touched.
 
 ## Runbook
 
@@ -59,8 +62,10 @@ node lib/factory.mjs 9600                            # standalone factory proces
 node 02-orchestration-g1.mjs --issue 3               # G1 end-to-end (needs Aurora + image)
 node 02-orchestration-g1.mjs --issue 3 --request-id issue-3-dev-<ts>   # dev re-run after a failed attempt
 node 03-worker-quality-g2.mjs --issues 1,2,3 [--allow-existing]         # G2 battery (needs Aurora + image)
+node 04-reviewer-g3.mjs                                        # G3 battery (needs Aurora + image)
+node 05-merge-gate-g4.mjs [--skip-crash]                       # G4 battery (needs Aurora + image; merges PRs #9/#7 by default — G4_T1_ISSUE / G4_T2_ISSUE to retarget)
 ```
 
-## Next (Phase 3)
+## Next (Phase 5)
 
-Independent reviewer: reviewer subagent on its own read-only checkout emits a structured verdict. The negative test is the gate — it must return `fail` with the correct reason on the trap issue (#4) and `pass` on a known-good branch.
+Feedback loop: take a concrete reviewer finding from Phases 2–3, record the lesson in the orchestrator's instructions (or file a follow-up task), re-run an analogous issue, and verify the corrected behavior appears. Gate G5: one concrete, verifiable instance of "the same mistake doesn't recur."
