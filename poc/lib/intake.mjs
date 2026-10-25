@@ -95,6 +95,11 @@ export function validateRoutes(routes) {
     }
     if (typeof r.secret !== "string" || !r.secret) throw new Error(`route ${r.repo} missing webhook secret`);
     if (r.target !== undefined && typeof r.target !== "string") throw new Error(`route ${r.repo} target must be a URL string`);
+    // Sender allowlist: when present, only these GitHub logins may trigger this
+    // factory. Checked AFTER signature verification, so sender.login is trusted.
+    if (r.allowedSenders !== undefined && (!Array.isArray(r.allowedSenders) || !r.allowedSenders.length || !r.allowedSenders.every((s) => typeof s === "string"))) {
+      throw new Error(`route ${r.repo} allowedSenders must be a non-empty array of login strings`);
+    }
     if (seen.has(r.repo)) throw new Error(`duplicate route for repo ${r.repo}`);
     seen.add(r.repo);
   }
@@ -195,6 +200,22 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
         }
         res.writeHead(403, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "payload repo does not match signing route" }));
+      }
+
+      // Sender allowlist (routes mode): signature proved GitHub sent this;
+      // now restrict WHO on GitHub may trigger this factory.
+      if (matchedRepo) {
+        const allowed = routes.find((r) => r.repo === matchedRepo)?.allowedSenders;
+        const sender = event?.sender?.login;
+        if (allowed && (!sender || !allowed.includes(sender))) {
+          const line = { deliveryId: req.headers["x-github-delivery"] ?? null, accepted: false, reason: `sender not allowlisted for ${matchedRepo}: ${sender ?? "<none>"}`, ts: new Date().toISOString() };
+          if (logPath) {
+            await mkdir(dirname(logPath), { recursive: true });
+            await appendFile(logPath, JSON.stringify(line) + "\n");
+          }
+          res.writeHead(403, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "sender not allowlisted for this repo" }));
+        }
       }
 
       let result;
