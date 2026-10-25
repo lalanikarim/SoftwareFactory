@@ -1,6 +1,6 @@
 # Software Factory PoC Plan — "Issue → Reviewed PR" on Pi Durable
 
-_Date: 2026-10-25 · Status: Phases 0–5 complete (G0, G1, G2, G3, G4, G5 passed) · Phase 6 pending · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
+_Date: 2026-10-25 · Status: all phases complete (G0–G5 passed; Phase 6 measured) · Companion docs: [`coding-agent-software-factories.md`](coding-agent-software-factories.md) (research), [`pi-durable-feasibility.md`](pi-durable-feasibility.md) (feasibility assessment)_
 
 ## 1. Context
 
@@ -136,6 +136,37 @@ Lesson recorded (via `note_lesson`, human-driver intervention in arm A since bot
 **Attribution: strong** — the baseline arm exhibited the mistake that then did not recur after the lesson was recorded. **Caveats, stated honestly:** (1) single trial per arm — this establishes one verifiable instance, not statistical reliability of the loop; (2) the orchestrator's *autonomous* lesson-distillation path (refusal → `note_lesson`) was not exercised because both arms passed review — the recording in arm A came from the human-driver fallback; (3) fix-pattern classification is a diff heuristic; raw diff excerpts are preserved in `g5-results.json` for human verification. The first battery run had bookkeeping bugs (orphaned factory holding the port; lesson file path mismatch) but showed the identical A→B behaviorally; the canonical rerun above is the recorded result.
 
 **G5 closes the loop claim:** with a durable lessons document feeding every worker prompt, a concrete reviewer finding from a prior run was recorded and the same mistake did not recur on an analogous issue. The factory now has all five behavioral gates (G0–G5); only Phase 6 (measurement & sizing) remains before the PoC is complete.
+
+## 1g. Phase 6 results — measurement & sizing (2026-10-25)
+
+**No gate.** Metrics extracted by `poc/07-measurement.mjs` from the surviving run databases (per-conversation `pi.usage` documents, transcripts, submissions) plus battery result JSONs; output in `poc/data/phase6-metrics.json`. All inference was local (`Qwen3.8-27B` GSQ on one RTX 4090), so monetary cost is $0 — the sizing proxy is tokens and wall time.
+
+**Per-issue cost (full chain: orchestrator + worker + reviewer).**
+
+| Run | Issue | New tokens (in+out) | Cache reads | Total tokens | Wall time |
+|---|---|---|---|---|---|
+| G1 e2e | #3 | n/a (db lost) | — | — | 361s |
+| G3 closed loop | #4 (trap) | 14.5K | 66.5K | 81K | 433s |
+| G4 T1 | #2 (stale rework) | 18.3K | 70.2K | 88K | 135s |
+| G4 T2 | #11 (+ crash) | 20.2K | 101.6K | 122K | 134s |
+| G5 A | #13 (baseline) | 23.2K | 121.6K | 145K | 143s |
+| G5 B | #13 (lessons) | 23.5K | 109.7K | 133K | 129s |
+
+**Role split.** The worker dominates: 48–87K tokens per run (~55–65% of the total); the reviewer is 17–45K (~25–35%); the orchestrator is 4–13K (~5–15%) — it spends most of its "tokens" on a handful of structured tool calls, not reasoning. Prompt caching (llama-server) absorbs 60–80% of total token volume as cache reads; the GPU-time proxy is the ~15–24K new tokens per issue.
+
+**Wall time.** Bounded issues — including the trap issue #4 — complete in **129–433s** end-to-end in battery runs (median ≈ 137s across the four fastest; G1's 361s includes first-time clone/setup overhead). Worker phase is the long pole, reviewer adds ~1–3 min. This is orders of magnitude above the engram toy-battery medians (2.2s / 5.1s / 13.2s per turn) — expected: one factory issue is ~30–60 model turns across three roles plus sandboxed test runs, not a single chat turn.
+
+**Reliability signals.** 3–5 errored tool calls per run (worker `bash` fumbles), all self-corrected with zero human fixes. Human interventions: the designed merge approval (one per merged PR) plus exactly one counted intervention in the whole PoC (the G5 arm-A lesson fallback instruction). Reviewer precision/recall over 8 verdicts: 1/1 trap caught with the correct root-cause reason, all known-good and correctly-fixed branches passed — no false positives or false negatives observed in this sample.
+
+**Sizing conclusions (drives the deferred decisions):**
+
+1. **Model pool.** The orchestrator role is cheap and mechanical (≤13K tokens/issue) — a smaller local model could plausibly take orchestration/triage, but 27B instruction-following reliability was load-bearing for G0–G5, so this stays an unverified optimization, not a conclusion. The worker is where the tokens go; that's the role to scale or offload.
+2. **Cloud fallback for the worker.** Bounded issues are cheap locally; the long tail (unbounded issues, multi-file refactors) is where the 27B dead-ends. Offloading *worker* work to a cloud frontier model — per issue or on review retry — is the natural first use of the unblocked-but-unexercised cloud path. Unexercised here; flagged as the next decision point.
+3. **Overnight batch on one GPU.** Single-threaded at ~2.5–8 min per bounded issue, a realistic plan is **~50–100 bounded issues per night** (theoretical ceiling ~100–288 before retries/stalls). That covers a steady drip of bounded issues for one repo; it does not cover backlog burn-down. Throughput was measured, not engineered — parallel workers are a later phase.
+
+**Caveats.** n=7 full-chain runs, one model, one fixture repo, bounded issues only. G1/G2 databases did not survive (token data unavailable for those runs). Cache-read behavior is inference-stack-specific (llama-server prompt caching); different stacks will shift the token mix even if the work is identical.
+
+**PoC complete.** All five behavioral gates passed and the loop is measured; the honest claim stands as written in the feasibility doc: a working single-repo factory for bounded issues on local inference, with the feedback loop verified once (not statistically), and cloud offload + parallelism as the identified next steps.
 
 ## 2. Goal & non-goals
 

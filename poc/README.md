@@ -12,7 +12,7 @@ Implementation for [research/poc-plan-factory.md](../research/poc-plan-factory.m
 | 3 — Independent reviewer | G3: trap caught with correct reason; good branch passed | **PASS** — 3/3 (`node 04-reviewer-g3.mjs`); gate owns its evidence, closed loop on #4 → draft PR in 441s |
 | 4 — Evidence & human checkpoint | G4: exactly-once merge across crash | **PASS** (`node 05-merge-gate-g4.mjs`, T1 143s / T2 144s): evidence complete on PR; single-use durable approvals; SIGKILL while approval pending → restart → approve → exactly one merge commit |
 | 5 — Feedback loop | G5: one verifiable "same mistake doesn't recur" | **PASS** (`node 06-feedback-g5.mjs`, 306s): baseline arm reproduced the #11 handler-patch mistake; after one recorded lesson, the re-run fixed it at the root (statusCode on the error class) — strong attribution; see plan doc §1f |
-| 6 — Measurement & sizing | (no gate) | pending |
+| 6 — Measurement & sizing | (no gate) | **DONE** (`node 07-measurement.mjs`): per-issue tokens by role from `pi.usage`, wall time, tool calls, interventions; bounded issues run 129–433s and ~81–145K total tokens on local inference; sizing write-up in plan doc §1g |
 
 ## Fixture
 
@@ -41,6 +41,7 @@ Issues are intentionally created **without** the `agent` label. Adding the label
 | `04-reviewer-g3.mjs` | G3 battery: seeded-bad trap caught, known-good passed, closed loop on the trap issue through review gate → draft PR; results to `data/g3-results.json` |
 | `05-merge-gate-g4.mjs` | G4 battery: factory as child process; merge directive → review gate → evidence check → approve via `/approvals` → retry → exactly-one-merge verification; T2 adds SIGKILL while approval pending + restart over the same db; results to `data/g4-results.json`. **Merges the target draft PRs on the fixture repo** |
 | `06-feedback-g5.mjs` | G5 battery: arm A (no lessons) → lesson recorded via `note_lesson` → arm B (same issue, lessons active); objective diff classification of fix pattern (root-level statusCode vs handler patch); results to `data/g5-results.json`. **Leaves the target draft PR open** (no merge in this gate) |
+| `07-measurement.mjs` | Phase 6 metrics extraction: reads every surviving run database (per-conversation `pi.usage` docs, transcripts, submissions) + battery result JSONs; emits per-run tokens by role, wall time, tool calls, errored calls, driver submissions → `data/phase6-metrics.json`. No inference needed |
 | `sandbox-image/Dockerfile` | Worker sandbox image: `node:24-alpine` + git. Build: `podman build -t factory-sandbox:latest poc/sandbox-image/` |
 
 ## Design decisions (Phase 1)
@@ -68,8 +69,9 @@ node 03-worker-quality-g2.mjs --issues 1,2,3 [--allow-existing]         # G2 bat
 node 04-reviewer-g3.mjs                                        # G3 battery (needs Aurora + image)
 node 05-merge-gate-g4.mjs [--skip-crash]                       # G4 battery (needs Aurora + image; merges PRs #9/#7 by default — G4_T1_ISSUE / G4_T2_ISSUE to retarget)
 node 06-feedback-g5.mjs                                        # G5 battery (needs Aurora + image; two factory runs on G5_ISSUE, default 13)
+node 07-measurement.mjs                                          # Phase 6 metrics extraction (no GPU; reads data/*.sqlite)
 ```
 
-## Next (Phase 6)
+## PoC complete — what's next
 
-Measurement & sizing: collect per-issue metrics from `pi.usage` and the batteries (tokens by role, wall time, tool calls, human interventions) and write the sizing section for a real single-repo deployment. All five behavioral gates (G0–G5) have passed; this is the final PoC phase.
+All six phases are done: G0–G5 passed and the loop is measured (§1g). The identified next steps, in rough order: real-project readiness (webhook signature verification, per-repo config, stuck-task recovery), cloud offload for the worker role on the long tail, and parallel workers for throughput.
