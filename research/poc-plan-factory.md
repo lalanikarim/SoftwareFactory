@@ -174,7 +174,7 @@ Lesson recorded (via `note_lesson`, human-driver intervention in arm A since bot
 
 **Non-goals (deferred to later phases):**
 
-- Multi-repo coordination, cross-repo dependency ordering
+- Multi-repo coordination, cross-repo dependency ordering — now specified as a follow-up in [`multi-repo-factory-plan.md`](multi-repo-factory-plan.md) (Target 1: N factories; Target 2: single orchestrator over M repos, with a decision rule for funding it)
 - HA / failover, Postgres-backed storage, multi-Pod scaling
 - Running N issues in parallel (throughput is *measured*, not engineered)
 - Browser automation, email client, MCP bridge
