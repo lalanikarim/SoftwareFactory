@@ -78,6 +78,13 @@ node 06-feedback-g5.mjs                                        # G5 battery (nee
 node 07-measurement.mjs                                          # Phase 6 metrics extraction (no GPU; reads data/*.sqlite)
 ```
 
+## Self-management readiness (dogfooding)
+
+Drydock is being onboarded as its own first managed repo. Status:
+
+- **Done:** runtime dependencies are declared (`package.json` + `package-lock.json`) so `npm ci` works in a fresh clone/sealed sandbox; the GPU-free G0 battery (`node 01-intake-g0.mjs`, exit status is the gate) serves as the repo's test entry point — it exercises intake, signature verification, and multi-repo routing without inference.
+- **Open decision:** three imports reach outside the repo into a sibling `engram` checkout (`poc/lib/{env,model,podman-sandbox}.mjs`). A fresh clone does not contain that path, so self-management needs either vendored copies (provenance-pinned) or engram's shared libs published as a private package. Decision pending before the drydock factory config is written.
+
 ## PoC complete — what's next
 
 All six phases are done: G0–G5 passed and the loop is measured (§1g). The identified next steps, in rough order: real-project readiness (webhook signature verification, per-repo config, stuck-task recovery), cloud offload for the worker role on the long tail, and parallel workers for throughput.
