@@ -22,6 +22,7 @@ import { factoryReviewerTask, makeReviewerRoleTools } from "./factory-reviewer.m
 import { openDraftPrTool } from "./open-draft-pr.mjs";
 import { MERGE_TOOL, MergeApprovalDoc, mergePrTool, findPendingMergeApprovals } from "./merge-gate.mjs";
 import { noteLessonTool, readLessons } from "./lessons.mjs";
+import { loadFactoryConfig, DEFAULTS } from "./factory-config.mjs";
 
 const ctx = BACKGROUND_CONTEXT;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -67,7 +68,7 @@ export const ORCHESTRATOR_INSTRUCTIONS = [
   `Use only the delegate, open_draft_pr, ${MERGE_TOOL}, and note_lesson tools. Do not edit files yourself.`,
 ].join("\n");
 
-export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
+export async function startFactory({ port = 0, rootDir, dbPath, configPath } = {}) {
   loadFactoryDotEnv();
   loadDotEnv(); // poc/.env as fallback (e.g. inference endpoint)
   const base = rootDir ?? join(__dirname, "..");
@@ -75,21 +76,33 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
   const dbFile = dbPath ?? process.env.FACTORY_DB ?? join(dataDir, "factory.sqlite");
   const workDir = join(base, "work");
 
+  // Per-repo config (multi-repo plan §3.1): explicit path > FACTORY_CONFIG env
+  // > legacy single-repo env fallback. A config file always wins when present.
+  const cfgPath = configPath ?? process.env.FACTORY_CONFIG;
+  let cfg;
+  if (cfgPath) {
+    cfg = loadFactoryConfig(cfgPath);
+  } else {
+    const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
+    cfg = { repo: fixturesRepo, sandboxImage: DEFAULTS.sandboxImage, setupCommand: null, testCommand: DEFAULTS.testCommand, gitToken: "", budgets: { ...DEFAULTS.budgets }, lessonsFile: null };
+    console.warn(`[factory] no config file (FACTORY_CONFIG) — using legacy env fallback for repo ${fixturesRepo}`);
+  }
+  const fixturesRepo = cfg.repo;
+  const ghToken = cfg.gitToken || process.env.FACTORY_GITHUB_TOKEN || "";
+
   // Inference host/model come from config (PI_PROVIDER_ID / OPENAI_BASE_URL /
   // OPENAI_API_KEY / PI_MODEL_ID) — see engram poc/lib/model.mjs.
   const modelRef = { provider: await providerId(), modelId: await modelId() };
-  const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
-  const ghToken = process.env.FACTORY_GITHUB_TOKEN ?? "";
 
   const registry = createRegistry();
   registry.install(CodingTools); // read/write/edit/bash — the worker's role tools
   // The worker task definition MUST be registered for the scheduler to dispatch it.
-  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo });
+  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, testCommand: cfg.testCommand });
   const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelRef });
   // Reviewer: independent read-only subagent; its verdict gates PR creation.
-  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo });
-  const reviewerRoleTools = makeReviewerRoleTools({ workDir });
-  const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef, reviewerTaskDef });
+  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo, image: cfg.sandboxImage });
+  const reviewerRoleTools = makeReviewerRoleTools({ workDir, testCommand: cfg.testCommand });
+  const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef, reviewerTaskDef, testCommand: cfg.testCommand });
   // Phase 4: the merge gate. Single-use durable approvals; the human decides via
   // POST /approvals below — the agent can never self-approve.
   const mergePr = mergePrTool({ fixturesRepo, ghToken });
@@ -225,6 +238,7 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
     port: server.address().port,
     workDir,
     fixturesRepo,
+    config: cfg,
     harness,
     rootConversation: () => rootConv,
     async close() {
@@ -235,10 +249,11 @@ export async function startFactory({ port = 0, rootDir, dbPath } = {}) {
   };
 }
 
-// Standalone: node lib/factory.mjs [port] [dbPath]
+// Standalone: node lib/factory.mjs [port] [dbPath] [configPath]
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   const port = process.argv[2] ? Number(process.argv[2]) : 9600;
   const dbPath = process.argv[3];
-  const f = await startFactory({ port, dbPath });
-  console.log(`factory listening on http://127.0.0.1:${f.port} (fixtures=${f.fixturesRepo})`);
+  const configPath = process.argv[4];
+  const f = await startFactory({ port, dbPath, configPath });
+  console.log(`factory listening on http://127.0.0.1:${f.port} (repo=${f.fixturesRepo}, testCommand=${f.config.testCommand})`);
 }

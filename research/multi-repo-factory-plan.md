@@ -26,6 +26,8 @@ _Companions: [`poc-plan-factory.md`](poc-plan-factory.md) (completed PoC, G0–G
 
 ### 3.1 Per-repo config file
 
+*Status: implemented — `poc/lib/factory-config.mjs` + `poc/config/`, with legacy env fallback during transition.*
+
 One validated JSON file per managed repo (factory-side, not in the target repo), e.g. `poc/config/<repo>.json`:
 
 ```json
@@ -131,7 +133,7 @@ Run the Target 1 pilot and **count Journey D**: how often does a human have to m
 
 | # | Decision | Default in this spec |
 |---|---|---|
-| D1 | Test command: factory-side config (B) vs repo-declared `factory.yaml` (C) — C is only safe if **all** test execution moves into sandboxes (incl. the host-side PR verification, which today runs on the host) | B for the pilot; revisit C with sandboxed host-verification after M1 |
+| D1 | Test command: factory-side config (B) vs repo-declared `factory.yaml` (C) — C is only safe if **all** test execution moves into sandboxes (incl. the host-side PR verification, which today runs on the host) | **Resolved 2026-10-25: B adopted and implemented** (`poc/lib/factory-config.mjs`, argv-only command validation). Revisit C with sandboxed host-verification after M1 |
 | D2 | Per-repo token provisioning (who issues/rotates) | Operator-managed in config; secret manager integration later |
 | D3 | Pilot repo pair (prefer similar stacks to de-risk images) | TBD at implementation start |
 | D4 | Second fixture repo for G6 | Only if Target 2 is funded per §4.4 |

@@ -91,7 +91,7 @@ function reviewerPrompt({ branch, issueNumber, issueText }) {
 }
 
 /** The reviewer role's custom tools (created once, registered at install time). */
-export function makeReviewerRoleTools({ workDir }) {
+export function makeReviewerRoleTools({ workDir, testCommand = "node --test" }) {
   const gitDiff = defineTool({
     name: "git_diff",
     description: "Show the candidate branch's diff against main: stat + full diff (truncated to ~8KB) and the list of changed files.",
@@ -109,7 +109,7 @@ export function makeReviewerRoleTools({ workDir }) {
 
   const runTests = defineTool({
     name: "run_tests",
-    description: "Run the test suite (`node --test`) inside the sandboxed checkout. Returns pass/fail counts and the output tail.",
+    description: `Run the repository's test suite (\`${testCommand}\`) inside the sandboxed checkout. Returns pass/fail counts and the output tail.`,
     parameters: Type.Object({}),
     replay: "safe", // deterministic given the fixed branch under review
     execute: async (_args, api, _ctx) => {
@@ -120,7 +120,7 @@ export function makeReviewerRoleTools({ workDir }) {
       try {
         // exec streams output via onOutput (the result carries only exitCode);
         // timeout is in SECONDS per the ExecutionEnv contract.
-        res = await sandbox.exec("node --test", { timeout: 300, onOutput: (t) => (out += t) });
+        res = await sandbox.exec(testCommand, { timeout: 300, onOutput: (t) => (out += t) });
       } catch (e) {
         res = { ok: false, error: { message: String(e.message) } };
       }

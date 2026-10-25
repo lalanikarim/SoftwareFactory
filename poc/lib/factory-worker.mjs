@@ -54,7 +54,7 @@ async function prepareWorkspace({ workDir, fixturesRepo, issueNumber, token }) {
   return ws;
 }
 
-function workerPrompt({ issueNumber, issueText, lessons = "" }) {
+function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "node --test" }) {
   const branch = `agent/issue-${issueNumber}`;
   return [
     `You are a software factory worker. The repository is checked out in /sandbox (your working directory), already on branch ${branch}.`,
@@ -79,7 +79,7 @@ function workerPrompt({ issueNumber, issueText, lessons = "" }) {
     `- Stay on branch ${branch}. Do not create other branches, do not push, and do not use any git remote commands.`,
     "- Implement the smallest change that satisfies the issue and its acceptance criteria. Follow the behavior spec in README.md where relevant.",
     "- Add or update tests in test/ covering the new behavior (node:test style, matching the existing suites).",
-    "- Run the full suite with `node --test` — it must pass before you finish.",
+    `- Run the full suite with \`${testCommand}\` — it must pass before you finish.`,
     '- Commit all changes: `git add` only the files you changed, then `git commit -m "<clear message>"`.',
     '- Final answer: one line "COMMITTED <short-sha>: <one-line summary>", then the last lines of the test run output. If you could not complete the work, say exactly what is blocking you instead.',
   ].join("\n");
@@ -93,7 +93,7 @@ async function cleanupSandbox(convId, ctx) {
   }
 }
 
-export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest" }) {
+export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test" }) {
   // TEMP(debug): log full stacks for phase faults while G1 is being brought up.
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
@@ -145,7 +145,7 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         const handle = await runtime.conversation(convId, ctx);
         if (handle === undefined) throw new Error("worker conversation missing");
         await handle.submit(
-          { type: "input", content: workerPrompt({ issueNumber, issueText, lessons }), requestId: `worker-${task.id}` },
+          { type: "input", content: workerPrompt({ issueNumber, issueText, lessons, testCommand }), requestId: `worker-${task.id}` },
           ctx,
         );
         await runtime.commit(() => ({ status: "running", checkpoint: { phase: "wait", convId } }), ctx);

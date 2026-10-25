@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
+import { commandArgv } from "./factory-config.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -19,18 +20,24 @@ async function sh(cmd, args, opts = {}) {
   return stdout.trim();
 }
 
-export async function runTestSuite(ws) {
+// Per-repo test command (validated argv, never a shell). `# tests/# pass/# fail`
+// counts are parsed only for node --test suites; other commands report
+// exit-status + tail so the evidence body stays honest about what was checked.
+export async function runTestSuite(ws, testCommand = "node --test") {
   const parse = (out) => ({
     total: lastCount(out, "# tests"),
     pass: lastCount(out, "# pass"),
     fail: lastCount(out, "# fail"),
   });
+  const argv = commandArgv(testCommand);
+  const [cmd, ...args] = argv;
+  const isNodeTest = cmd === "node" && args.includes("--test");
   try {
-    const out = await sh("node", ["--test"], { cwd: ws });
-    return { passed: true, ...parse(out), tail: out.split("\n").slice(-6).join("\n") };
+    const out = await sh(cmd, args, { cwd: ws });
+    return { passed: true, ...(isNodeTest ? parse(out) : {}), tail: out.split("\n").slice(-6).join("\n") };
   } catch (e) {
     const out = String(e.stdout ?? "") + String(e.stderr ?? "");
-    return { passed: false, ...parse(out), tail: out.split("\n").slice(-10).join("\n") };
+    return { passed: false, ...(isNodeTest ? parse(out) : {}), tail: out.split("\n").slice(-10).join("\n") };
   }
 }
 
@@ -130,7 +137,7 @@ async function pushBranch(ws, branch, ghToken) {
   }
 }
 
-export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef, reviewerTaskDef }) {
+export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef, reviewerTaskDef, testCommand = "node --test" }) {
   return defineTool({
     name: "open_draft_pr",
     description:
@@ -184,7 +191,7 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef,
         };
       }
 
-      const tests = await runTestSuite(ws);
+      const tests = await runTestSuite(ws, testCommand);
       const diffStatText = await diffStat(ws, branch);
       const workerReport = await workerReportFromTranscript(api, ctx);
       const body = buildPrBody({ issueNumber, summary, verdict, tests, diffStatText, workerReport, log });
