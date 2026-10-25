@@ -101,7 +101,10 @@ node 07-measurement.mjs                                          # Phase 6 metri
 Drydock is being onboarded as its own first managed repo. Status:
 
 - **Done:** runtime dependencies are declared (`package.json` + `package-lock.json`) so `npm ci` works in a fresh clone/sealed sandbox; the GPU-free G0 battery (`node 01-intake-g0.mjs`, exit status is the gate) serves as the repo's test entry point — it exercises intake, signature verification, and multi-repo routing without inference.
-- **Open decision:** three imports reach outside the repo into a sibling `engram` checkout (`poc/lib/{env,model,podman-sandbox}.mjs`). A fresh clone does not contain that path, so self-management needs either vendored copies (provenance-pinned) or engram's shared libs published as a private package. Decision pending before the drydock factory config is written.
+- **Done:** engram shared libs are pinned in-repo as a git submodule at `poc/vendor/engram` (SHA `0a8b63c`, engram main as of 2026-10-25). All imports are now relative to the repo — no sibling-directory dependency. Fresh clones need `git clone --recurse-submodules` (or `git submodule update --init`) before use.
+- **Verified:** a fresh clone of this branch + `npm ci` resolves every module and passes G0 18/18 with no GPU.
+
+Bumping the engram pin: `cd poc/vendor/engram && git fetch origin && git checkout <new-sha>`, then commit the submodule pointer from the repo root.
 
 ## PoC complete — what's next
 
