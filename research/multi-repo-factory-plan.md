@@ -109,6 +109,10 @@ Default strategy: **ephemeral setup phase** — a one-shot disposable container 
 
 **Total: ~3–5 focused days.** Risks: (1) per-repo image/setup differences surface only at M1 — mitigated by picking two similar-stack pilot repos first; (2) GPU contention worse than budgets assume — measured, not predicted, via the extended metrics script; (3) supervision gaps (zombie sandboxes after hard kills) — the existing per-conversation sandbox teardown already handles in-process faults; host-level kill cleanup is a known small gap to verify in M2.
 
+### 3.9 Open recovery tasks (surfaced by the drydock self-run)
+
+- **T1 — Recover from partial runs:** when a task aborts mid-work (e.g., wall-clock budget exceeded) after changes have been made, preserve the partial work and resume/requeue rather than treating the run as a clean failure. Currently the abort lands in a terminal task state and the orchestrator concludes; there is no recover-from-partial path. Surfaced by the drydock self-run (issue #18 → aborted at the 1800s budget; fix + regression test written but uncommitted; no PR opened).
+
 ## 4. Target 2 as follow-up (one orchestrator, M repos)
 
 ### 4.1 What carries over from Target 1
