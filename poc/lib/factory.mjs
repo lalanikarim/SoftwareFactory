@@ -23,6 +23,7 @@ import { openDraftPrTool } from "./open-draft-pr.mjs";
 import { MERGE_TOOL, MergeApprovalDoc, mergePrTool, findPendingMergeApprovals } from "./merge-gate.mjs";
 import { noteLessonTool, readLessons } from "./lessons.mjs";
 import { loadFactoryConfig, DEFAULTS } from "./factory-config.mjs";
+import { loadSandboxPolicy } from "./sandbox-health.mjs";
 
 const ctx = BACKGROUND_CONTEXT;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -97,10 +98,14 @@ export async function startFactory({ port = 0, rootDir, dbPath, configPath } = {
   const registry = createRegistry();
   registry.install(CodingTools); // read/write/edit/bash — the worker's role tools
   // The worker task definition MUST be registered for the scheduler to dispatch it.
-  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, testCommand: cfg.testCommand, setupCommand: cfg.setupCommand, wallSecsPerIssue: cfg.budgets.wallSecsPerIssue });
+  // Containment last line (§3.6): which base images may be spawned and under
+  // which host root workspaces may be mounted. Factory-level by design —
+  // per-repo configs can select from the allowlist, never widen it.
+  const sandboxPolicy = loadSandboxPolicy(workDir);
+  const workerTaskDef = factoryWorkerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, testCommand: cfg.testCommand, setupCommand: cfg.setupCommand, wallSecsPerIssue: cfg.budgets.wallSecsPerIssue, sandboxPolicy });
   const delegate = factoryDelegateTool({ taskDef: workerTaskDef, modelRef });
   // Reviewer: independent read-only subagent; its verdict gates PR creation.
-  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, setupCommand: cfg.setupCommand, wallSecsPerIssue: cfg.budgets.wallSecsPerIssue });
+  const reviewerTaskDef = factoryReviewerTask({ workDir, fixturesRepo, image: cfg.sandboxImage, setupCommand: cfg.setupCommand, wallSecsPerIssue: cfg.budgets.wallSecsPerIssue, sandboxPolicy });
   const reviewerRoleTools = makeReviewerRoleTools({ workDir, testCommand: cfg.testCommand });
   const openDraftPr = openDraftPrTool({ workDir, fixturesRepo, ghToken, modelRef, reviewerTaskDef, testCommand: cfg.testCommand });
   // Phase 4: the merge gate. Single-use durable approvals; the human decides via

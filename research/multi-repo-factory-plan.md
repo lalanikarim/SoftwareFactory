@@ -83,9 +83,11 @@ All factories share one inference endpoint (Aurora/llama-server on the RTX 4090)
 
 ### 3.6 Sandbox images & dependency install
 
-*Status: implemented — `poc/lib/setup-sandbox.mjs`, wired into both worker and reviewer spawn phases.*
+*Status: implemented — `poc/lib/setup-sandbox.mjs`, wired into both worker and reviewer spawn phases; image/mount-root allowlist in `poc/lib/sandbox-health.mjs` (2026-10-26).*
 
 Default strategy: **ephemeral setup phase** — a one-shot disposable container runs the host-defined `setupCommand` (e.g. `npm ci`) with egress, then exits; the long-lived agent sandbox is created sealed (`network=none`). Dependency state persists via the host-mounted workspace volume, so the agent never runs in a networked container and the setup command comes from factory-side config, never repo content. Runs are idempotent (re-run on task resume) and fail closed before the agent conversation starts. Optimization (later): per-repo prebuilt images with deps baked in.
+
+**Containment last line — sandbox allowlist** (pattern from engram phase 7): every container the factory spawns (setup, worker, reviewer — including supervised recreation) is validated against a **factory-level policy** before any podman call: the base image must be on `SANDBOX_ALLOW_IMAGES` (comma-separated env; default `factory-sandbox:latest`) and the workspace must live under `SANDBOX_MOUNT_ROOT` (default: the factory's work dir). The policy is deliberately **not** per-repo config — a repo entry may select from the allowlist but can never widen it, so a stale or compromised `<repo>.json` fails fast with a clear message instead of spawning an arbitrary container. Unit-tested in `test/sandbox-allowlist.test.mjs` (incl. mount-root prefix-trickery).
 
 ### 3.7 Gates & acceptance criteria
 
