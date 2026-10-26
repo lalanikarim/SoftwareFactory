@@ -85,7 +85,7 @@ export async function startFactory({ port = 0, rootDir, dbPath, configPath } = {
     cfg = loadFactoryConfig(cfgPath);
   } else {
     const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
-    cfg = { repo: fixturesRepo, sandboxImage: DEFAULTS.sandboxImage, setupCommand: null, testCommand: DEFAULTS.testCommand, gitToken: "", budgets: { ...DEFAULTS.budgets }, lessonsFile: null };
+    cfg = { repo: fixturesRepo, sandboxImage: DEFAULTS.sandboxImage, setupCommand: null, testCommand: DEFAULTS.testCommand, gitToken: "", budgets: { ...DEFAULTS.budgets }, lessonsFile: null, approvalTtlHours: DEFAULTS.approvalTtlHours };
     console.warn(`[factory] no config file (FACTORY_CONFIG) — using legacy env fallback for repo ${fixturesRepo}`);
   }
   const fixturesRepo = cfg.repo;
@@ -199,7 +199,10 @@ export async function startFactory({ port = 0, rootDir, dbPath, configPath } = {
         return res.end(readLessons());
       }
       if (req.method === "GET" && url.pathname === "/approvals") {
-        const approvals = await findPendingMergeApprovals(harness, rootConv.id, ctx);
+        // TTL pass: pending merge approvals auto-deny after approvalTtlHours
+        // (engram approvals phase 3 pattern) so a stale request can't sit in a
+        // terminal-blocking state forever — the orchestrator sees decidedBy=ttl.
+        const approvals = await findPendingMergeApprovals(harness, rootConv.id, ctx, cfg.approvalTtlHours * 3600 * 1000);
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify({ approvals }));
       }

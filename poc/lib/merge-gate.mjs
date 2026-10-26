@@ -30,14 +30,36 @@ async function sh(cmd, args, opts = {}) {
 export const MERGE_TOOL = "merge_pr";
 
 /** Durable per-key approval record. Only the factory's /approvals endpoint
- *  (standing in for the human) writes `decision`; only the tool consumes it. */
+ *  (standing in for the human) writes `decision`; only the tool consumes it.
+ *  `createdAt` starts the TTL clock at request time; records created before the
+ *  field existed load without it (same doc version, additive field) and get
+ *  stamped lazily on first observation by findPendingMergeApprovals. */
 export const MergeApprovalDoc = defineDocFamily({
   family: true,
   scope: "session",
   kind: "factory.merge-approval",
   version: 1,
-  initial: () => ({ decision: "pending", decidedBy: null, consumed: false }),
+  initial: () => ({ decision: "pending", decidedBy: null, consumed: false, createdAt: 0 }),
 });
+
+/** TTL expiry (pattern from engram approvals phase 3): a pending request is
+ *  expired once it has been waiting longer than ttlMs. Unknown/zero createdAt
+ *  never expires here — the caller stamps legacy records first. */
+export function isApprovalExpired(createdAt, now, ttlMs) {
+  return Number.isFinite(createdAt) && createdAt > 0 && now - createdAt > ttlMs;
+}
+
+/** Decide what the /approvals scan should do with one record. Pure (no I/O);
+ *  the caller applies the returned action in a commit.
+ *    "stamp" — pending record without createdAt (legacy): start the clock now
+ *    "deny"  — pending and past TTL: durably auto-deny (decidedBy: "ttl")
+ *    "keep"  — anything else, including already-decided records */
+export function resolveApprovalExpiry(doc, now, ttlMs) {
+  if (doc.decision !== "pending") return { action: "keep" };
+  if (!Number.isFinite(doc.createdAt) || doc.createdAt <= 0) return { action: "stamp", createdAt: now };
+  if (isApprovalExpired(doc.createdAt, now, ttlMs)) return { action: "deny" };
+  return { action: "keep" };
+}
 
 /** Canonical JSON (sorted keys) so identical args hash identically across retries. */
 export function stableStringify(value) {
@@ -107,6 +129,7 @@ export function mergePrTool({ fixturesRepo, ghToken = "" }) {
       const key = mergeApprovalKey({ issueNumber });
       const grant = await api.commit(async (tx) => {
         const d = await tx.doc(MergeApprovalDoc, key, {});
+        if (!d.createdAt) d.createdAt = Date.now(); // TTL clock starts at request time
         if (d.decision === "approved" && !d.consumed) {
           d.consumed = true;
           return { granted: true };
@@ -115,11 +138,14 @@ export function mergePrTool({ fixturesRepo, ghToken = "" }) {
       }, ctx);
 
       if (!grant.granted) {
+        const expired = grant.decision === "denied" && grant.decidedBy === "ttl";
         return {
           output: [
             {
               type: "text",
-              text: `REQUIRES APPROVAL: ${MERGE_TOOL} for issue #${issueNumber} (PR #${pr.number}) requires human approval before it can run. Approval key: ${key}. Report this key and STOP — do not retry until a human approves the key.`,
+              text: expired
+                ? `EXPIRED: approval for ${MERGE_TOOL} on issue #${issueNumber} (PR #${pr.number}) was auto-denied after waiting past the TTL (decidedBy=ttl). A human must re-approve key ${key}. Report this key and STOP — do not retry until a human approves.`
+                : `REQUIRES APPROVAL: ${MERGE_TOOL} for issue #${issueNumber} (PR #${pr.number}) requires human approval before it can run. Approval key: ${key}. Report this key and STOP — do not retry until a human approves the key.`,
             },
           ],
           isError: true,
@@ -157,8 +183,13 @@ export function mergePrTool({ fixturesRepo, ghToken = "" }) {
 }
 
 /** Scan the root conversation transcript for blocked merge_pr calls and report
- *  each approval key with its durable decision state. Newest block first. */
-export async function findPendingMergeApprovals(harness, conversationId, ctx) {
+ *  each approval key with its durable decision state. Newest block first.
+ *
+ *  When `ttlMs` is given, pending records are also resolved against the TTL
+ *  (engram approvals phase 3 pattern): legacy records without createdAt are
+ *  stamped (clock starts at first observation), and expired ones are durably
+ *  auto-denied with decidedBy "ttl" — idempotent under concurrent decisions. */
+export async function findPendingMergeApprovals(harness, conversationId, ctx, ttlMs = null) {
   // Read-only transaction: entry scans live on the Tx surface.
   const page = await harness.commit((tx) => tx.scanEntries({ conversationId }, 500), ctx);
   const seen = new Map(); // key -> record (first = newest, scan is descending)
@@ -176,7 +207,30 @@ export async function findPendingMergeApprovals(harness, conversationId, ctx) {
       decision: doc?.decision ?? "pending",
       decidedBy: doc?.decidedBy ?? null,
       consumed: doc?.consumed ?? false,
+      createdAt: doc?.createdAt ?? 0,
     });
+  }
+  if (ttlMs != null) {
+    const now = Date.now();
+    for (const rec of seen.values()) {
+      const expiry = resolveApprovalExpiry(rec, now, ttlMs);
+      if (expiry.action === "keep") continue;
+      await harness.commit(async (tx) => {
+        const d = await tx.doc(MergeApprovalDoc, rec.key, {});
+        if (d.decision !== "pending") return d; // re-check: decided concurrently
+        if (expiry.action === "stamp") {
+          if (!d.createdAt) d.createdAt = expiry.createdAt;
+          return d;
+        }
+        d.decision = "denied";
+        d.decidedBy = "ttl";
+        return d;
+      }, ctx);
+      const fresh = await harness.snapshot(MergeApprovalDoc, rec.key, ctx);
+      rec.decision = fresh?.decision ?? rec.decision;
+      rec.decidedBy = fresh?.decidedBy ?? null;
+      rec.createdAt = fresh?.createdAt ?? 0;
+    }
   }
   return [...seen.values()];
 }
