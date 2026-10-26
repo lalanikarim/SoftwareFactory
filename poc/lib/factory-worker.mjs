@@ -111,7 +111,7 @@ export async function awaitIdleWithinBudget(handle, ctx, budgetSecs) {
   }
 }
 
-export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null, wallSecsPerIssue = 1800 }) {
+export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", testCommand = "node --test", setupCommand = null, wallSecsPerIssue = 1800, sandboxPolicy = null }) {
   // TEMP(debug): log full stacks for phase faults while G1 is being brought up.
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
@@ -141,12 +141,13 @@ export function factoryWorkerTask({ workDir, fixturesRepo, image = "factory-sand
         // Setup phase (§3.6): dependency installs run in a one-shot
         // networked container; the agent's own sandbox is then sealed.
         if (setupCommand) {
-          await runSetupInContainer({ workspace: ws, image, setupCommand });
+          await runSetupInContainer({ workspace: ws, image, setupCommand, policy: sandboxPolicy });
         }
 
         // Supervised: a dead engram-sbx-* container is detected and recreated
         // on the next exec instead of causing silent agent retry loops (#20).
-        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none" });
+        // Policy (when given) validates image/mount root at construction.
+        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none", policy: sandboxPolicy });
         // configure() needs tool REGISTRATION objects, not name strings.
         const tools = runtime.registry
           .installed()

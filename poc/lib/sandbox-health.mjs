@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { ExecutionError, err } from "@earendil-works/pi-durable/env";
 import { PodmanSandboxEnv } from "../vendor/engram/poc/lib/podman-sandbox.mjs";
+import { DEFAULTS } from "./factory-config.mjs";
 
 /** Name prefix of all factory sandbox containers. */
 export const CONTAINER_PREFIX = "engram-sbx-";
@@ -59,19 +60,49 @@ function isMissingContainer(e) {
   return /no such object|no container with name or ID|not found/i.test(String(e?.message ?? e));
 }
 
+/** Containment last line (engram phase 7 pattern, plan §3.6): the base image
+ *  must be on the factory's allowlist and the workspace must live under the
+ *  allowed mount root. Pure — callers apply it before any podman call. */
+export function validateSandboxSpec({ image, workspace, allowImages, mountRoot }) {
+  if (!Array.isArray(allowImages) || !allowImages.includes(image)) {
+    throw new Error(`sandbox image not allowlisted: ${image} (allowed: ${[...(allowImages ?? [])].join(", ") || "<none>"})`);
+  }
+  if (workspace !== mountRoot && !workspace.startsWith(`${mountRoot}/`)) {
+    throw new Error(`sandbox workspace ${workspace} is outside the allowed mount root ${mountRoot}`);
+  }
+}
+
+/** Factory-level sandbox policy from env — deliberately NOT per-repo config:
+ *  repo configs must not be able to widen the sandbox surface.
+ *   SANDBOX_ALLOW_IMAGES — comma-separated base-image allowlist
+ *                           (default: the factory default image)
+ *   SANDBOX_MOUNT_ROOT   — host root under which all sandbox workspaces live
+ *                           (default: this factory's work dir) */
+export function loadSandboxPolicy(workDir) {
+  const list = (process.env.SANDBOX_ALLOW_IMAGES ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    allowImages: list.length ? list : [DEFAULTS.sandboxImage],
+    mountRoot: process.env.SANDBOX_MOUNT_ROOT?.trim() || workDir,
+  };
+}
+
 /**
  * PodmanSandboxEnv that supervises its own container. Same options as
  * PodmanSandboxEnv plus:
  *   - onEvent?: (event: string) => void — sink for dead-container events
  *     (default: console.error, so the factory log surfaces every detection);
  *   - podman?: (args: string[], context?) => Promise<string> — injectable
- *     podman runner (tests).
+ *     podman runner (tests);
+ *   - policy?: { allowImages, mountRoot } — sandbox containment policy; when
+ *     given, image/workspace are validated at construction (fail fast before
+ *     the conversation can exist). The factory always passes one.
  */
 export class SupervisedPodmanSandbox extends PodmanSandboxEnv {
   #inFlight;
 
   constructor(opts = {}) {
     super(opts);
+    if (opts.policy) validateSandboxSpec({ image: this.image, workspace: this.workspace, ...opts.policy });
     this.onEvent = opts.onEvent ?? ((event) => console.error(`[sandbox.health] ${event}`));
     this.podman = opts.podman ?? runPodman;
     /** Dead-container detections, oldest first: { containerId, state, at }. */

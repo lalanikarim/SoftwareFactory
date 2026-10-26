@@ -15,13 +15,16 @@
 // before its conversation starts.
 
 import { spawn } from "node:child_process";
+import { validateSandboxSpec } from "./sandbox-health.mjs";
 
 /**
  * Run a repo's setup command in a one-shot networked container.
- * @param {{ workspace: string, image: string, setupCommand: string, timeoutSecs?: number }} o
+ * @param {{ workspace: string, image: string, setupCommand: string, timeoutSecs?: number, policy?: {allowImages: string[], mountRoot: string} }} o
  *        setupCommand is a validated argv-only string (factory-config).
+ *        policy (when given) is enforced before any podman call.
  */
-export async function runSetupInContainer({ workspace, image, setupCommand, timeoutSecs = 900 }) {
+export async function runSetupInContainer({ workspace, image, setupCommand, timeoutSecs = 900, policy = null }) {
+  if (policy) validateSandboxSpec({ image, workspace, ...policy });
   const argv = setupCommand.trim().split(/\s+/);
   const containerId = `factory-setup-${Date.now()}`;
   console.log(`[setup] running ${setupCommand} in one-shot networked container (${containerId})`);

@@ -155,7 +155,7 @@ export function makeReviewerRoleTools({ workDir, testCommand = "node --test" }) 
   return [gitDiff, runTests, submitVerdict];
 }
 
-export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", setupCommand = null, wallSecsPerIssue = 900 }) {
+export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sandbox:latest", setupCommand = null, wallSecsPerIssue = 900, sandboxPolicy = null }) {
   const guarded = (label, fn) => async (task, runtime, ctx) => {
     try {
       return await fn(task, runtime, ctx);
@@ -180,12 +180,13 @@ export function factoryReviewerTask({ workDir, fixturesRepo, image = "factory-sa
         // Setup phase (§3.6): the reviewer's sealed sandbox needs the same
         // dependency install before it can run tests.
         if (setupCommand) {
-          await runSetupInContainer({ workspace: ws, image, setupCommand });
+          await runSetupInContainer({ workspace: ws, image, setupCommand, policy: sandboxPolicy });
         }
 
         // Supervised: a dead engram-sbx-* container is detected and recreated
         // on the next exec instead of causing silent agent retry loops (#20).
-        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none" });
+        // Policy (when given) validates image/mount root at construction.
+        const sandbox = new SupervisedPodmanSandbox({ workspace: ws, image, network: "none", policy: sandboxPolicy });
         const tools = runtime.registry
           .installed()
           .flatMap((e) => e.tools ?? [])
