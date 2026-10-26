@@ -153,3 +153,49 @@ Run the Target 1 pilot and **count Journey D**: how often does a human have to m
 | D2 | Per-repo token provisioning (who issues/rotates) | Operator-managed in config; secret manager integration later |
 | D3 | Pilot repo pair (prefer similar stacks to de-risk images) | TBD at implementation start |
 | D4 | Second fixture repo for G6 | Only if Target 2 is funded per §4.4 |
+
+## 5. Migration to engram core (drop poc wiring for a proper composition)
+
+_Date: 2026-10-26 · Status: Phase 0 complete — Phase 1 pending start. Full issue: [#30](https://github.com/lalanikarim/drydock/issues/30)._
+
+**Decision (owner, 2026-10-26):** drydock is built **on an engram core**, not the other way around. The explicit poc-era wiring — hand-rolled registry composition, raw http shim, own approval plumbing, imports of `vendor/engram/poc/lib/*` helpers — is dropped in favor of a proper composition against the core's public seam `createCoreInstance()` (engram issue #42 / PR #43). **Boundary: engram provides the core; all factory business logic stays in drydock.** Nothing factory-specific moves upstream.
+
+### 5.1 The seam (pin target `cde8bb7`)
+
+`createCoreInstance({ config, modelsConfig?, extraExtensions?, host?, port?, rootAgent?, rootInit? }) → { harness, server, actualPort, rootConversationId, close }`, plus `loadConfig(overrides?)`. Stability contract (engram `src/core.ts`): lifecycle + injection point stable; config additive; breaking seam changes get a major bump. **Import rule for factory code: only `vendor/engram/app/src/core.ts` and `config.ts`** — nothing from `app/src/` internals or `poc/lib`. Reference doc: engram `docs/product-core-split.md`, Flow 4 (this migration).
+
+### 5.2 Dropped vs. kept
+
+| Dropped (replaced by core wiring) | Kept in drydock (business logic, ported to TS extensions) |
+|---|---|
+| `MergeApprovalDoc` + JSON `/approvals` endpoint (+ §3.3 TTL port, PR #28) → core approval machinery: tiers, destructive guard, allow-rules, TTL, batching, Telegram/Web surfaces | Webhook intake: HMAC pre-parse verification, per-repo routing, sender allowlist (`intake.mjs`, `adapter.mjs`) — routes retarget core `/tasks` |
+| Raw node-http shim in `factory.mjs` (`/tasks`, `/health`, …) → core HTTP/SSE server + Web UI + Telegram | Worker/reviewer task defs, prompts, tool filtering |
+| Hand-rolled sandbox allowlist (PR #29) → core `SandboxManager` allowlists | Merge gate git semantics: `gh` ops, draft→ready, verified PR-state idempotency (merge = destructive-tier gated tool) |
+| Imports of `vendor/engram/poc/lib/{model,env,podman-sandbox}.mjs` → `loadModelsConfig` / `loadConfig(overrides)` / core per-conversation env | Wall-clock budgets (`awaitIdleWithinBudget`) |
+| `supervise.mjs` `/approvals` fan-out for stuck detection → `GET /board` + client surfaces (thin fleet aggregator may remain) | Lessons feedback loop; supervised sandbox health wrapper over `SandboxManager`; per-repo config validation → per-instance `loadConfig(overrides)` + factory budgets |
+
+### 5.3 Decisions (locked 2026-10-26)
+
+| # | Decision | Resolution |
+|---|---|---|
+| D2 | Merge approval consumption | **Drop single-use consumption.** Keys are per-args and the tool is idempotent via verified PR state (stays in drydock); exactly-once rests on GitHub state. Behavior delta: an approved-but-never-executed merge auto-passes if the identical call recurs — matches core semantics for all tools |
+| D3 | Repo layout | **New tree:** `vendor/engram/` + `factory/` (main, intake, worker, reviewer, merge-gate, budgets, lessons, config) + `fleet/`; `poc/` decommissioned after cutover. Gate letters (G0–G5, M1–M3) remain the acceptance vocabulary |
+| D4 | Composition language | **TS** (matches core; shares types with `core.ts`/`config.ts`; type-stripping runtime verified in Phase 0) |
+
+### 5.4 Phases
+
+- **Phase 0 — Spike: DONE (PR #31, merged 2026-10-26).** Pin bumped to `cde8bb7`; `poc/core-spike.test.ts` passes 8/8: single pi-durable copy across the vendor boundary (the vendored copy resolves bare imports into drydock's `poc/node_modules` — no dual-package hazard; standing rule: never install node_modules inside the submodule), drydock-defined `extraExtensions` visible to root, core tools coexist, board does not leak into the bare core, `/health` on ephemeral port, idempotent `close()` + port release. Pre-existing suite 30/30 unaffected.
+- **Phase 1 — Port the pipeline as extensions.** Worker/reviewer task defs + delegate tool; merge gate as destructive-tier gated tool through the core approval hook (per D2); intake routes to `/tasks`; budgets wired into wait phases; per-repo config → `loadConfig(overrides?)` + factory budgets. New `factory/` tree with root package layout (spike moves out of `poc/`).
+- **Phase 2 — Parity: re-run the full acceptance suite.** G0–G5 + M1/M2/M3, plus Phase 6 measurement vs. the pre-migration baseline (**129–433 s, ~81–145K tokens per bounded issue**, one local GPU). Drift must be measured and explained. **Honesty note: prior G0–G5 evidence is superseded by this rewire until Phase 2 passes.**
+- **Phase 3 — Cutover & decommission.** Pilot repos: `lalanikarim/factory-fixture` first, then `lalanikarim/drydock`; delete replaced `poc/lib` internals (intake + fleet survive); evidence tables re-stamped with Phase 2 results.
+- **Phase 4 — Pin discipline (ongoing).** One gate script runs the full suite; every submodule bump re-validated against the stability contract.
+
+### 5.5 Effort & risks
+
+~1–2 focused weeks for Phases 1–3. Risks: upstream churn (mitigated by SHA pin + gate script + stability contract); evidence reset at Phase 2 (stated explicitly, baseline recorded); `extraExtensions` run with full core privilege (vet like first-party code; consequential actions registered as approval-gated tools — the "human is the control boundary" invariant must survive into consumer extensions); per-instance human surfaces grow attack surface (bearer token + LAN bind posture; destructive tier keeps merges human-gated).
+
+### 5.6 Follow-on effects
+
+- **§3.9 T1 (partial-run recovery) stays parked** until after migration — the resume/requeue design is cleaner on the core's task machinery.
+- **Target 2 (§4) becomes the board/collective story:** engram's Project 0 board + Collective A1–A4 (member domain memory, peer trust tiers, untrusted peer input, containment of a bad member) are built and tested upstream; per-repo instances become members via the M2 federation seam. Revisit the §4.4 decision rule after Phase 3.
+- PRs #28 (approval TTL) and #29 (sandbox allowlist) are **absorbed by the core** once Phases 1–3 land — they were manual ports of exactly the machinery the composition now provides; their tests move with the code or are retired at cutover.
