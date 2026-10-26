@@ -25,14 +25,14 @@ import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 
-const POC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // ---- env: drydock's poc/.env (the vendored loadDotEnv points inside the
 // submodule where no .env exists — parse our own, never overwrite ambient) ----
 function readFactoryEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
-    for (const line of readFileSync(path.join(POC_ROOT, ".env"), "utf8").split("\n")) {
+    for (const line of readFileSync(path.join(ROOT, "poc", ".env"), "utf8").split("\n")) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (m) out[m[1]] = m[2];
     }
@@ -92,12 +92,12 @@ test("engram core seam spike (issue #30 phase 0)", { timeout: 120_000 }, async (
     return; // skip, like engram's live suites
   }
 
-  const { loadConfig } = await import("./vendor/engram/app/src/config.ts");
-  const { createCoreInstance } = await import("./vendor/engram/app/src/core.ts");
+  const { loadConfig } = await import("../vendor/engram/app/src/config.ts");
+  const { createCoreInstance } = await import("../vendor/engram/app/src/core.ts");
 
   // ---- 1. Single pi-durable copy across the vendor boundary ----
   const requireHere = createRequire(import.meta.url);
-  const requireVendor = createRequire(path.join(POC_ROOT, "vendor", "engram", "app", "src", "core.ts"));
+  const requireVendor = createRequire(path.join(ROOT, "vendor", "engram", "app", "src", "core.ts"));
   assert.equal(
     requireVendor.resolve("@earendil-works/pi-durable"),
     requireHere.resolve("@earendil-works/pi-durable"),

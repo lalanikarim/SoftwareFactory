@@ -17,7 +17,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadFactoryDotEnv, startFactory } from "./lib/factory.mjs";
 import { startIntakeServer } from "./lib/intake.mjs";
-import { loadDotEnv } from "./vendor/engram/poc/lib/env.mjs";
+import { loadDotEnv } from "../vendor/engram/poc/lib/env.mjs";
 
 const pExecFile = promisify(execFile);
 async function sh(cmd, args, opts = {}) {
