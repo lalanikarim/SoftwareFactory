@@ -162,7 +162,7 @@ _Date: 2026-10-26 · Status: Phase 0 complete — Phase 1 pending start. Full is
 
 ### 5.1 The seam (pin target `cde8bb7`)
 
-`createCoreInstance({ config, modelsConfig?, extraExtensions?, host?, port?, rootAgent?, rootInit? }) → { harness, server, actualPort, rootConversationId, close }`, plus `loadConfig(overrides?)`. Stability contract (engram `src/core.ts`): lifecycle + injection point stable; config additive; breaking seam changes get a major bump. **Import rule for factory code: only `vendor/engram/app/src/core.ts` and `config.ts`** — nothing from `app/src/` internals or `poc/lib`. Reference doc: engram `docs/product-core-split.md`, Flow 4 (this migration).
+`createCoreInstance({ config, modelsConfig?, extraExtensions?, host?, port?, rootAgent?, rootInit? }) → { harness, server, actualPort, rootConversationId, close }`, plus `loadConfig(overrides?)`. Stability contract (engram `src/core.ts`): lifecycle + injection point stable; config additive; breaking seam changes get a major bump. **Import rule for factory code: only `vendor/engram/app/src/core.ts` and `config.ts`** — nothing from `app/src/` internals or `poc/lib`. Reference doc: engram `docs/ecosystem-flows.md`, Flow 4 (this migration) — supersedes the flow sections of `product-core-split.md`, which remains the seam API record (PR #43).
 
 ### 5.2 Dropped vs. kept
 
