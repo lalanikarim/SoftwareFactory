@@ -15,6 +15,7 @@ export const DEFAULTS = {
   sandboxImage: "factory-sandbox:latest",
   testCommand: "node --test",
   budgets: { wallSecsPerIssue: 1800, maxReviewRetries: 2 },
+  approvalTtlHours: 24,
 };
 
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -33,7 +34,7 @@ export function commandArgv(cmd) {
 /** Validate and normalize one repo's config object. Throws on any violation. */
 export function validateFactoryConfig(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("config must be a JSON object");
-  const known = new Set(["repo", "sandboxImage", "setupCommand", "testCommand", "gitToken", "budgets", "lessonsFile"]);
+  const known = new Set(["repo", "sandboxImage", "setupCommand", "testCommand", "gitToken", "budgets", "lessonsFile", "approvalTtlHours"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) throw new Error(`unknown config field: ${key}`);
   }
@@ -58,6 +59,13 @@ export function validateFactoryConfig(raw) {
   if (raw.lessonsFile !== undefined && (typeof raw.lessonsFile !== "string" || !raw.lessonsFile.trim())) {
     throw new Error("lessonsFile must be a non-empty string when present");
   }
+  let approvalTtlHours = DEFAULTS.approvalTtlHours;
+  if (raw.approvalTtlHours !== undefined) {
+    if (typeof raw.approvalTtlHours !== "number" || !Number.isFinite(raw.approvalTtlHours) || raw.approvalTtlHours <= 0) {
+      throw new Error(`approvalTtlHours must be a positive number, got: ${JSON.stringify(raw.approvalTtlHours)}`);
+    }
+    approvalTtlHours = raw.approvalTtlHours;
+  }
   return {
     repo: raw.repo,
     sandboxImage,
@@ -66,6 +74,7 @@ export function validateFactoryConfig(raw) {
     gitToken: raw.gitToken ?? "",
     budgets,
     lessonsFile: raw.lessonsFile ?? null,
+    approvalTtlHours,
   };
 }
 

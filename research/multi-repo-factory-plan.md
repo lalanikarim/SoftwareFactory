@@ -60,11 +60,12 @@ Extends the signature verification landed in the webhook PR (`poc/lib/intake.mjs
 
 ### 3.3 Process model & supervision
 
-*Status: implemented — `poc/supervise.mjs` (fleet file, restart-on-fault, status table); examples in `poc/fleet.example.json` / `poc/routes.example.json`.*
+*Status: implemented — `poc/supervise.mjs` (fleet file, restart-on-fault, status table); examples in `poc/fleet.example.json` / `poc/routes.example.json`; approval TTL auto-deny in `poc/lib/merge-gate.mjs` (2026-10-26).*
 
 - **One factory process per repo** — the existing `lib/factory.mjs` needs no core changes; each instance gets its own port, sqlite db, lessons file, and config from §3.1.
 - Supervision via compose/systemd: one unit per factory + one adapter unit; restart-on-fault (the durable harness already recovers in-process state from its db — crash-durability is the PoC's core property).
 - **Status aggregation**: a small read-only script/endpoint that fans out to each factory's `/health`, `/approvals`, and `/tool-results` and prints one table: repo, current issue, state (working / awaiting approval / stuck), wall time so far. This is the operator dashboard for Target 1.
+- **Approval expiry (TTL auto-deny)**: a pending merge approval no longer blocks a factory's single concurrency slot forever. `GET /approvals` resolves pending records against `approvalTtlHours` (per-repo config, §3.1; default **24 h**): expired records are durably auto-denied with `decidedBy: "ttl"` (idempotent, re-checked under concurrent decisions), and the `merge_pr` retry path reports EXPIRED so the orchestrator knows a fresh human approval is needed rather than looping. Records created before the field existed get their clock stamped on first observation. Pattern from engram approvals phase 3; decision logic unit-tested in `test/merge-gate-ttl.test.mjs`.
 
 ### 3.4 Shared-resource governance (the one new design problem)
 
