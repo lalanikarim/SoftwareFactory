@@ -91,7 +91,9 @@ async function main() {
     console.error(`[factory] config at ${configPath} declares repo ${factoryCfg.repo}, but was started for ${repo}`);
     process.exit(1);
   }
-  const root = join(__dirname, "..", "factory-instances", repo.replace("/", "_"));
+  // FACTORY_INSTANCES_ROOT: gate scripts and tests use isolated per-run roots;
+  // production leaves it unset (repo-root factory-instances/).
+  const root = join(process.env.FACTORY_INSTANCES_ROOT ?? join(__dirname, "..", "factory-instances"), repo.replace("/", "_"));
   const dataDir = join(root, "engram-data");
   const configDir = join(root, "config");
   const workRoot = join(root, "work");
@@ -108,6 +110,8 @@ async function main() {
   }, null, 2));
 
   const image = factoryCfg.sandboxImage ?? process.env.FACTORY_SANDBOX_IMAGE ?? "factory-sandbox:latest";
+  // Per-instance declarative files (gates.json) are read from configDir —
+  // honored since engram #48 (pin 51b4d39).
   const config = loadConfig({
     dataDir,
     configDir,
