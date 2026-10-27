@@ -18,7 +18,9 @@ import { promisify } from "node:util";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createIntakeAdapter, type IntakeDispatch } from "../factory/intake.ts";
+// NOTE: plain ESM — no TS syntax in .mjs gates (Node's strip-types does not
+// transform .mjs); types are omitted here and in the dispatch binding below.
+import { createIntakeAdapter } from "../factory/intake.ts";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath } from "./lib.ts";
 
 const pExecFile = promisify(execFile);
@@ -60,7 +62,7 @@ async function runIssue(issueNumber) {
 
   const t0 = Date.now();
   const instance = await spawnInstance({ repo: fixturesRepo, configPath: defaultConfigPath(fixturesRepo) });
-  const dispatch: IntakeDispatch = async ({ requestId, content }) => {
+  const dispatch = async ({ requestId, content }) => {
     const res = await fetch(`${instance.base}/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${instance.token}` },
