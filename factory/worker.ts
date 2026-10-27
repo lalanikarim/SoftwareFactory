@@ -89,7 +89,7 @@ function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "nod
     `- Stay on branch ${branch}. Do not create other branches, do not push, and do not use any git remote commands.`,
     "- Implement the smallest change that satisfies the issue and its acceptance criteria. Follow the behavior spec in README.md where relevant.",
     "- Add or update tests in test/ covering the new behavior (node:test style, matching the existing suites).",
-    `- Run the full suite with \`${testCommand}\` — it must pass before you finish.`,
+    `- Run the full suite with \`${testCommand}\` — it must pass before you finish. Do NOT write or run your own long-running scripts, servers, or e2e harnesses: verification is exactly \`${testCommand}\`. Any ad-hoc command must terminate on its own within seconds (wrap any network wait in an AbortController timeout).`,
     '- Commit all changes: `git add` only the files you changed, then `git commit -m "<clear message>"`.',
     '- Final answer: one line "COMMITTED <short-sha>: <one-line summary>", then the last lines of the test run output. If you could not complete the work, say exactly what is blocking you instead.',
   ].join("\n");

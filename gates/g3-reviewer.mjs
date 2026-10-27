@@ -1,0 +1,371 @@
+// Phase 2 / Gate G3 — independent reviewer (factory/ composition).
+//
+//   node --experimental-strip-types gates/g3-reviewer.mjs [--skip-chain] [--request-id <id>]
+//
+// Tests:
+//   T1 (negative): reviewer on the seeded bad branch agent/issue-4-seeded-bad
+//      (the "obvious fix" for trap issue #4: a timeout that stops the hang by
+//      resolving with a fake error payload — no status surfaced, retries never
+//      fire). Must return verdict fail with a reason pointing at the root cause.
+//   T2 (positive control): reviewer on known-good agent/issue-1. Must pass.
+//   T3 (closed loop): full chain on trap issue #4 via the PRODUCTION entrypoint
+//      (factory/main.ts child process) + intake. Worker commits; open_draft_pr
+//      runs the review; fail => no draft PR + finding reported; pass => draft
+//      PR exists. Informational for the gate; records the loop.
+//
+// Gate G3: T1 caught (fail + substantive reason) AND T2 passed.
+//
+// T1/T2 compose a minimal core instance (createCoreInstance seam) carrying the
+// PRODUCTION reviewer extension (factory/reviewer.ts) plus a small local
+// "review" root tool that mirrors open_draft_pr's createTask+waitForTask call —
+// no factory logic is re-implemented here.
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Type } from "@earendil-works/pi-ai";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createCoreInstance } from "../vendor/engram/app/src/core.ts";
+import { loadConfig } from "../vendor/engram/app/src/config.ts";
+import { factoryReviewerTask, makeReviewerRoleTools } from "../factory/reviewer.ts";
+import { loadFactoryEnv, spawnInstance, defaultConfigPath, rootConversationId, waitForToolResult } from "./lib.ts";
+
+const pExecFile = promisify(execFile);
+async function sh(cmd, args, opts = {}) {
+  const { stdout } = await pExecFile(cmd, args, { maxBuffer: 16 * 1024 * 1024, ...opts });
+  return stdout.trim();
+}
+
+const ctx = BACKGROUND_CONTEXT;
+loadFactoryEnv();
+const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
+const image = process.env.FACTORY_SANDBOX_IMAGE ?? "factory-sandbox:latest";
+const skipChain = process.argv.includes("--skip-chain");
+// Deterministic intake requestIds (issue-<n>) make redeliveries exactly-once no-ops.
+// Pass --request-id <id> for a fresh dev re-run of the chain.
+const requestIdOverride = (() => {
+  const i = process.argv.indexOf("--request-id");
+  return i >= 0 ? process.argv[i + 1] : undefined;
+})();
+const runDir = await mkdtemp(join(tmpdir(), "gates-g3-"));
+const results = { t1: null, t2: null, t3: null };
+
+// ---------------------------------------------------------------------------
+// Preflight
+// ---------------------------------------------------------------------------
+async function preflight() {
+  const models = await fetch(`${process.env.OPENAI_BASE_URL}/models`, { headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
+  if (!models.ok) throw new Error(`inference endpoint /models returned ${models.status}`);
+  await sh("podman", ["image", "exists", image]);
+  await sh("gh", ["api", `repos/${fixturesRepo}`, "--jq", ".full_name"]);
+}
+
+/** Resolve the factory's model ref: "auto" probes the endpoint for the loaded model. */
+async function resolveModelRef() {
+  const baseUrl = process.env.OPENAI_BASE_URL;
+  const apiKey = process.env.OPENAI_API_KEY ?? "";
+  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/models`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`GET /models failed: ${res.status}`);
+  const j = await res.json();
+  const list = j.data ?? [];
+  if (!list.length) throw new Error("endpoint reported no models");
+  const m = list.find((x) => x.loaded) ?? list[0];
+  console.log(`resolved auto model: ${m.id}`);
+  return { provider: "aurora", modelId: m.id };
+}
+
+// ---------------------------------------------------------------------------
+// Seeded bad branch for the negative test (idempotent fixture artifact).
+// ---------------------------------------------------------------------------
+const SEEDED_RETRY = `// Minimal HTTP client + retry wrapper used by the reporting job to pull data
+// from upstream services.
+
+export class HttpError extends Error {
+  constructor(status, url) {
+    super(\`HTTP \${status} from \${url}\`);
+    this.name = "HttpError";
+    this.status = status;
+    this.url = url;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Fix: cap request() so a hanging upstream can never stall callers.
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+export async function request(url, opts = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { ...opts, signal: controller.signal });
+    // Any HTTP status is treated as success; the caller gets the parsed body.
+    return await res.json();
+  } catch (err) {
+    // A hanging upstream must not hang the caller: surface a bounded error payload.
+    if (err.name === "AbortError") {
+      return { error: \`upstream timeout after \${DEFAULT_TIMEOUT_MS}ms\` };
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Call fn up to (retries + 1) times. Retries only happen when fn throws.
+export async function withRetry(fn, { retries = 3, delayMs = 50 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+`;
+
+const SEEDED_TEST_APPEND = `
+test("request to a hanging 503 upstream is bounded and returns an error marker", async () => {
+  const mock = await startMock((req, res) => {
+    res.writeHead(503); // never ends the body — simulates a stuck upstream
+  });
+  try {
+    const t0 = Date.now();
+    const result = await request(\`http://127.0.0.1:\${mock.port}/data\`);
+    assert.ok(Date.now() - t0 < 30_000, "must be bounded");
+    assert.equal(typeof result.error, "string", "error marker surfaced");
+  } finally {
+    mock.server.close();
+  }
+});
+`;
+
+const SEEDED_BRANCH = "agent/issue-4-seeded-bad";
+
+async function ensureSeededBadBranch() {
+  let exists = false;
+  try {
+    const out = (await sh("git", ["ls-remote", `https://github.com/${fixturesRepo}.git`, `refs/heads/${SEEDED_BRANCH}`])).trim();
+    exists = out.length > 0;
+  } catch { /* treat as missing */ }
+  if (exists) {
+    console.log(`seeded bad branch ${SEEDED_BRANCH} already present`);
+    return;
+  }
+  const dir = await mkdtemp(join(tmpdir(), "g3-seed-"));
+  await sh("git", ["clone", "--quiet", "--branch", "main", `https://github.com/${fixturesRepo}.git`, join(dir, "repo")]);
+  const repo = join(dir, "repo");
+  writeFileSync(join(repo, "src/retry.mjs"), SEEDED_RETRY);
+  appendFileSync(join(repo, "test/retry.test.mjs"), SEEDED_TEST_APPEND);
+  // Sanity: the seeded branch's own suite must pass (that's what makes it a trap).
+  await sh("node", ["--test"], { cwd: repo });
+  await sh("git", ["-C", repo, "add", "src/retry.mjs", "test/retry.test.mjs"]);
+  await sh("git", ["-C", repo, "-c", "user.name=software-factory-poc", "-c", "user.email=factory@localhost", "commit", "-q", "-m", "Seed: bounded-timeout fix for hanging upstreams (review fixture)"]);
+  await sh("git", ["-C", repo, "push", "--quiet", "origin", "HEAD:refs/heads/" + SEEDED_BRANCH]);
+  console.log(`seeded bad branch ${SEEDED_BRANCH} pushed (own suite passes — it is a trap)`);
+}
+
+// ---------------------------------------------------------------------------
+// Isolated reviewer run on its own core instance (seam composition).
+// ---------------------------------------------------------------------------
+async function runReviewer({ label, branch, issueNumber }) {
+  const modelRef = await resolveModelRef();
+  const root = join(runDir, label);
+  const dataDir = join(root, "engram-data");
+  const configDir = join(root, "config");
+  const workRoot = join(root, "work");
+  for (const d of [dataDir, configDir, workRoot]) mkdirSync(d, { recursive: true });
+
+  const reviewerTaskDef = factoryReviewerTask({ workDir: workRoot, fixturesRepo, image });
+  const reviewerRoleTools = makeReviewerRoleTools({ workDir: workRoot });
+  // Test glue mirroring open_draft_pr's review invocation (createTask + waitForTask).
+  const reviewTool = defineTool({
+    name: "review",
+    description: "Run the independent reviewer on a branch. Returns the verdict JSON.",
+    parameters: Type.Object({ branch: Type.String(), issueNumber: Type.Integer() }),
+    replay: "unsafe", // spawns a child task; the harness tracks it durably
+    execute: async (args, api, c) => {
+      const id = await api.createTask(
+        reviewerTaskDef,
+        { branch: args.branch, issueNumber: args.issueNumber, ...modelRef },
+        { ownership: { kind: "task", taskId: api.taskId } },
+        c,
+      );
+      const settled = await api.waitForTask(id, c);
+      return {
+        output: [{ type: "text", text: JSON.stringify(settled.state.outcome?.result ?? { error: String(settled.state.status) }) }],
+      };
+    },
+  });
+
+  process.env.API_TOKEN = randomBytes(16).toString("hex");
+  const config = loadConfig({
+    dataDir,
+    configDir,
+    workRoot,
+    sandbox: { image, network: "none", allowImages: [image], allowMountRoot: workRoot },
+  });
+  // reviewTool must be registry-installed (agent `tools` filters resolve by
+  // name against the registry); unregistered definitions are silently dropped.
+  const ext = defineExtension({ name: "factory-reviewer", tools: [...reviewerRoleTools, reviewTool], tasks: [reviewerTaskDef] });
+  const inst = await createCoreInstance({
+    config,
+    extraExtensions: [ext],
+    port: 0,
+    rootAgent: {
+      model: modelRef,
+      thinkingLevel: "medium",
+      tools: [reviewTool],
+      instructions:
+        "You run one review per message. Call review with the branch and issue number given in the message, wait for its result, then answer with exactly the verdict JSON the tool returned (no other text).",
+    },
+  });
+
+  try {
+    const rootConv = await inst.harness.conversation(inst.rootConversationId, ctx);
+    const t0 = Date.now();
+    const sub = await rootConv.submit(
+      { type: "input", content: `Review branch ${branch} for issue #${issueNumber}. Call review({branch: "${branch}", issueNumber: ${issueNumber}}).`, requestId: `g3-${label}` },
+      ctx,
+    );
+    const settled = await sub.wait(ctx);
+    const wallSecs = Math.round((Date.now() - t0) / 1000);
+
+    // Ground truth: the reviewer task's durable outcome (not the root's prose).
+    const page = await rootConv.commit((tx) => tx.scanTasks({ kind: "factory.reviewer" }, 10), ctx);
+    const taskRecords = page.items;
+    const verdict = taskRecords.length > 0 ? taskRecords[taskRecords.length - 1].state.outcome?.result : null;
+    return { label, branch, issueNumber, wallSecs, settledStatus: settled.status, verdict };
+  } finally {
+    await inst.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Objective reason-quality check for the negative test.
+// The root cause of #4: non-2xx responses are treated as success, so no error
+// carries the upstream HTTP status and retries never fire. A substantive
+// reason must name the status-surfacing defect AND the retry/masking effect.
+// ---------------------------------------------------------------------------
+function reasonPointsAtRootCause(verdict) {
+  if (!verdict || verdict.verdict !== "fail") return false;
+  const text = [...(verdict.concerns ?? []), ...(verdict.evidence ?? [])].join(" ").toLowerCase();
+  const statusSignal = /http status|status code|5\d\d|non-2xx|not 2xx|httperror|surfaces? the (upstream )?status/.test(text);
+  const rootCauseSignal = /retr(y|ies|ied)|never fires|mask|as success|treated as success|resolv(es|ed) with|fake|without (surfacing|throwing)/.test(text);
+  return statusSignal && rootCauseSignal;
+}
+
+// ---------------------------------------------------------------------------
+console.log("G3 battery: independent reviewer");
+await preflight();
+await ensureSeededBadBranch();
+
+// T1 — negative test on the seeded bad branch.
+console.log("\nT1: reviewer vs seeded bad branch (trap #4)");
+results.t1 = await runReviewer({ label: "t1-seeded-bad", branch: SEEDED_BRANCH, issueNumber: 4 });
+console.log(`  verdict=${JSON.stringify(results.t1.verdict)} (${results.t1.wallSecs}s)`);
+results.t1.caught = reasonPointsAtRootCause(results.t1.verdict);
+
+// T2 — positive control on known-good agent/issue-1.
+console.log("\nT2: reviewer vs known-good agent/issue-1");
+results.t2 = await runReviewer({ label: "t2-known-good", branch: "agent/issue-1", issueNumber: 1 });
+console.log(`  verdict=${JSON.stringify(results.t2.verdict)} (${results.t2.wallSecs}s)`);
+results.t2.passed = results.t2.verdict?.verdict === "pass";
+
+// T3 — closed loop on trap issue #4 through the PRODUCTION entrypoint.
+if (!skipChain) {
+  console.log("\nT3: full chain on trap issue #4 (worker -> review -> gate), production entrypoint");
+  const t0 = Date.now();
+  const instance = await spawnInstance({ repo: fixturesRepo, configPath: defaultConfigPath(fixturesRepo) });
+
+  const { startIntakeServer } = await import("../factory/intake.ts");
+  const { server: intake, port: intakePort } = await startIntakeServer({
+    logPath: join(runDir, "intake-g3-issue-4.jsonl"),
+    dispatch: async ({ requestId, content }) => {
+      const res = await fetch(`${instance.base}/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${instance.token}` },
+        body: JSON.stringify({ requestId: requestIdOverride ?? requestId, content }),
+      });
+      if (!res.ok) throw new Error(`factory /tasks returned ${res.status}`);
+      return res.json();
+    },
+  });
+
+  const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", ".title"]);
+  const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", '.body // ""'])).trim();
+  const event = {
+    action: "opened",
+    delivery_id: `g3-issue-4-${Date.now()}`,
+    repository: { full_name: fixturesRepo },
+    issue: { number: 4, title: issueTitle, body: issueBody, labels: [{ name: "agent" }] },
+  };
+  const delivery = await fetch(`http://127.0.0.1:${intakePort}/webhook/github`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-github-event": "issues", "x-github-delivery": event.delivery_id },
+    body: JSON.stringify(event),
+  });
+  if (!(await delivery.json()).accepted) throw new Error("intake rejected issue #4");
+
+  // Wait for open_draft_pr's tool result in the root conversation (it carries
+  // either {refused, review} or {prUrl}). 60 min: the 27B worker on trap
+  // issue #4 has taken up to ~30+ minutes.
+  const deadline = Date.now() + 60 * 60_000;
+  let openDraftResult = null;
+  const convId = await rootConversationId(instance.base, instance.token);
+  while (Date.now() < deadline) {
+    try {
+      openDraftResult = await waitForToolResult(instance.base, instance.token, convId, "open_draft_pr", () => true, 60_000);
+      break;
+    } catch { /* not yet — keep waiting */ }
+    process.stdout.write(".");
+  }
+  intake.close();
+
+  const wallSecs = Math.round((Date.now() - t0) / 1000);
+  let prExists = false;
+  try {
+    const out = await sh("gh", ["pr", "list", "--repo", fixturesRepo, "--state", "open", "--head", "agent/issue-4", "--json", "number,url"]);
+    prExists = JSON.parse(out || "[]").length > 0;
+  } catch { /* none */ }
+
+  let verdict = null;
+  try {
+    const parsed = JSON.parse(openDraftResult ?? "");
+    if (parsed.refused) verdict = parsed.review;
+    else if (parsed.prUrl) verdict = { verdict: "pass", note: "open_draft_pr opened the PR" };
+  } catch { /* no parsable result */ }
+
+  const gateHeld = verdict ? (verdict.verdict === "fail" ? !prExists : prExists) : false;
+  results.t3 = { wallSecs, openDraftResult: openDraftResult?.slice(0, 400) ?? null, verdict, prExists, gateHeld };
+  console.log(`  verdict=${JSON.stringify(verdict)} draftPR=${prExists} gateHeld=${gateHeld} (${wallSecs}s)`);
+  await instance.close();
+} else {
+  console.log("\nT3: skipped (--skip-chain)");
+}
+
+// ---------------------------------------------------------------------------
+const t1Pass = results.t1.caught;
+const t2Pass = results.t2.passed;
+const gate = t1Pass && t2Pass ? "PASS" : "FAIL";
+console.log(`\nG3 ${gate}`);
+console.log(`  T1 negative (seeded bad #4): caught=${t1Pass} ${results.t1.verdict ? `(verdict=${results.t1.verdict.verdict})` : "(no verdict)"}`);
+console.log(`  T2 positive (known-good #1): passed=${t2Pass} ${results.t2.verdict ? `(verdict=${results.t2.verdict.verdict})` : "(no verdict)"}`);
+if (results.t3) console.log(`  T3 closed loop (#4): gateHeld=${results.t3.gateHeld}, draftPR=${results.t3.prExists}`);
+
+writeFileSync(join(runDir, "g3-results.json"), JSON.stringify({ date: new Date().toISOString(), results }, null, 2));
+console.log(`results: ${join(runDir, "g3-results.json")}`);
+process.exitCode = gate === "PASS" ? 0 : 1;
