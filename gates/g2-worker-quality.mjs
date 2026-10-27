@@ -19,8 +19,8 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // NOTE: plain ESM — no TS syntax in .mjs gates (Node's strip-types does not
-// transform .mjs); types are omitted here and in the dispatch binding below.
-import { createIntakeAdapter } from "../factory/intake.ts";
+// transform .mjs); types are omitted throughout this file.
+import { startIntakeServer } from "../factory/intake.ts";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath } from "./lib.ts";
 
 const pExecFile = promisify(execFile);
@@ -71,11 +71,10 @@ async function runIssue(issueNumber) {
     if (!res.ok) throw new Error(`factory /tasks returned ${res.status}`);
     return res.json();
   };
-  const intake = createIntakeAdapter({
+  const { server: intake, port: intakePort } = await startIntakeServer({
     logPath: join(runDir, `intake-g2-issue-${issueNumber}.jsonl`),
     dispatch,
   });
-  const intakePort = await intake.listen(0);
 
   const issue = await sh("gh", ["api", `repos/${fixturesRepo}/issues/${issueNumber}`, "--jq", ".title"]);
   const body = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/${issueNumber}`, "--jq", '.body // ""'])).trim();

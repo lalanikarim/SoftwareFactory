@@ -289,8 +289,8 @@ if (!skipChain) {
   const t0 = Date.now();
   const instance = await spawnInstance({ repo: fixturesRepo, configPath: defaultConfigPath(fixturesRepo) });
 
-  const { createIntakeAdapter } = await import("../factory/intake.ts");
-  const intake = createIntakeAdapter({
+  const { startIntakeServer } = await import("../factory/intake.ts");
+  const { server: intake, port: intakePort } = await startIntakeServer({
     logPath: join(runDir, "intake-g3-issue-4.jsonl"),
     dispatch: async ({ requestId, content }) => {
       const res = await fetch(`${instance.base}/tasks`, {
@@ -302,7 +302,6 @@ if (!skipChain) {
       return res.json();
     },
   });
-  const intakePort = await intake.listen(0);
 
   const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", ".title"]);
   const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", '.body // ""'])).trim();
