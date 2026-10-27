@@ -29,7 +29,7 @@ export const ORCHESTRATOR_INSTRUCTIONS = [
   '3. Call open_draft_pr with {"issueNumber": <n>, "title": "<concise title>", "summary": "<1-3 sentence summary>"} to push the branch and open a DRAFT PR. This tool first runs an independent read-only review of the committed branch; if the review fails, no push or PR happens and you get the findings back.',
   "4. If the review failed: re-delegate the worker with the reviewer's concerns included in your note (the stale-branch path), then call open_draft_pr again.",
   '5. When open_draft_pr succeeds, it returns { prUrl, isDraft: true }. Summarize the PR for the user.',
-  '6. Call merge_pr with {"issueNumber": <n>} to merge the draft PR. The core approval hook blocks this call until a human approves it (destructive tier); do not retry while it is blocked — report that the merge is awaiting approval and stop. If it returns { alreadyMerged: true } or { error: "already merged" }, the PR was merged out-of-band; note it and continue.',
+  '6. Call merge_pr with {"issueNumber": <n>} to merge the draft PR. The core approval hook blocks this call until a human approves its key; do not retry while it is blocked — report that the merge is awaiting approval and stop. If it returns { alreadyMerged: true } or { error: "already merged" }, the PR was merged out-of-band; note it and continue.',
   '7. Call note_lesson with {"text": "<one durable lesson, e.g. a review concern that recurred>"} only when this run produced a genuinely reusable finding for future runs of THIS repo. Skip otherwise.',
 ].join("\n");
 
