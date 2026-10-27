@@ -34,7 +34,9 @@ const opt = (flag, dflt) => {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : dflt;
 };
-const issues = opt("--issues", "1,2,3").split(",").map(Number);
+// Second-generation fixture issues (#16–#18); the first generation (1–3) is
+// already merged into main, so re-running it yields "no changes needed".
+const issues = opt("--issues", "16,17,18").split(",").map(Number);
 const timeoutMin = Number(opt("--timeout-min", "25"));
 const allowExisting = argv.includes("--allow-existing");
 
@@ -177,34 +179,27 @@ const api = (base, method, path, body) =>
 
 async function checkBehavior(issueNumber, dir) {
   return withServer(dir, async (base) => {
-    if (issueNumber === 1) {
-      const unknown = await api(base, "GET", "/invoices/999999");
-      const created = await api(base, "POST", "/invoices", { customerId: "c1", amountCents: 10 });
-      const known = await api(base, "GET", `/invoices/${created.body.id}`);
+    if (issueNumber === 16) {
+      const a = await api(base, "POST", "/invoices", { customerId: "f-c1", amountCents: 10 });
+      const b = await api(base, "POST", "/invoices", { customerId: "f-c2", amountCents: 20 });
+      const c = await api(base, "POST", "/invoices", { customerId: "f-c1", amountCents: 30 });
+      const onlyC1 = await api(base, "GET", "/invoices?customer=f-c1");
+      const miss = await api(base, "GET", "/invoices?customer=no-such-customer");
+      const composed = await api(base, "GET", "/invoices?customer=f-c2&status=open");
+      const all = await api(base, "GET", "/invoices");
+      const c1Ok = onlyC1.status === 200 &&
+        onlyC1.body.invoices.length === 2 &&
+        onlyC1.body.invoices.every((i) => i.customerId === "f-c1") &&
+        onlyC1.body.invoices[0].id < onlyC1.body.invoices[1].id;
+      const missOk = miss.status === 200 && miss.body.invoices.length === 0;
+      const composedOk = composed.status === 200 && composed.body.invoices.length === 1 && composed.body.invoices[0].id === b.body.id;
+      const allOk = all.status === 200 && [a.body.id, b.body.id, c.body.id].every((id) => all.body.invoices.some((i) => i.id === id));
       return {
-        ok: unknown.status === 404 && Boolean(unknown.body.error) && known.status === 200,
-        detail: `unknown-id ${unknown.status} (want 404+error), known-id ${known.status} (want 200)`,
+        ok: c1Ok && missOk && composedOk && allOk,
+        detail: `?customer=f-c1 ok=${c1Ok}, miss ok=${missOk}, composed ok=${composedOk}, unfiltered ok=${allOk}`,
       };
     }
-    if (issueNumber === 2) {
-      const a = await api(base, "POST", "/invoices", { customerId: "f-open", amountCents: 10 });
-      const b = await api(base, "POST", "/invoices", { customerId: "f-paid", amountCents: 20 });
-      const c = await api(base, "POST", "/invoices", { customerId: "f-void", amountCents: 30 });
-      await api(base, "PUT", `/invoices/${b.body.id}/status`, { status: "paid" });
-      await api(base, "PUT", `/invoices/${c.body.id}/status`, { status: "voided" });
-      const paid = await api(base, "GET", "/invoices?status=paid");
-      const bogus = await api(base, "GET", "/invoices?status=bogus");
-      const paidOk =
-        paid.status === 200 &&
-        paid.body.invoices.length >= 1 &&
-        paid.body.invoices.every((i) => i.status === "paid") &&
-        paid.body.invoices.some((i) => i.id === b.body.id);
-      return {
-        ok: paidOk && bogus.status >= 400 && bogus.status < 500,
-        detail: `?status=paid ${paid.status} (all-paid=${paidOk}), ?status=bogus ${bogus.status} (want 4xx)`,
-      };
-    }
-    if (issueNumber === 3) {
+    if (issueNumber === 17) {
       const before = await api(base, "GET", "/summary");
       await api(base, "POST", "/invoices", { customerId: "s-open", amountCents: 100 });
       const paid = await api(base, "POST", "/invoices", { customerId: "s-paid", amountCents: 200 });
@@ -215,8 +210,25 @@ async function checkBehavior(issueNumber, dir) {
       return {
         ok:
           after.body.invoiceCount === before.body.invoiceCount + 2 &&
-          after.body.totalCents === before.body.totalCents + 300,
-        detail: `count ${before.body.invoiceCount}->${after.body.invoiceCount} (want +2), total ${before.body.totalCents}->${after.body.totalCents} (want +300)`,
+          after.body.totalCents === before.body.totalCents + 300 &&
+          after.body.openCents === before.body.openCents + 100 &&
+          after.body.paidCents === before.body.paidCents + 200 &&
+          after.body.openCents + after.body.paidCents === after.body.totalCents,
+        detail: `count ${before.body.invoiceCount}->${after.body.invoiceCount} (want +2), open ${before.body.openCents}->${after.body.openCents} (want +100), paid ${before.body.paidCents}->${after.body.paidCents} (want +200)`,
+      };
+    }
+    if (issueNumber === 18) {
+      const inv = await api(base, "POST", "/invoices", { customerId: "t-idem", amountCents: 50 });
+      const sameOpen = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "open" });
+      await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
+      const samePaid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
+      const invalid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "voided" });
+      return {
+        ok:
+          sameOpen.status === 200 && sameOpen.body.status === "open" &&
+          samePaid.status === 200 && samePaid.body.status === "paid" &&
+          invalid.status === 409,
+        detail: `open->open ${sameOpen.status} (want 200), paid->paid ${samePaid.status} (want 200), paid->voided ${invalid.status} (want 409)`,
       };
     }
     throw new Error(`no behavior check defined for issue #${issueNumber}`);

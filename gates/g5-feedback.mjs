@@ -30,7 +30,7 @@
 // strength is reported separately: "strong" if step A exhibited the handler
 // patch that then disappeared, "single-trial" otherwise.
 //
-// Usage: node --experimental-strip-types gates/g5-feedback.mjs  (env: G5_ISSUE=13)
+// Usage: node --experimental-strip-types gates/g5-feedback.mjs  (env: G5_ISSUE=19)
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -44,7 +44,7 @@ const pexec = promisify(execFile);
 loadFactoryEnv();
 const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
 
-const ISSUE = Number(process.env.G5_ISSUE ?? 13);
+const ISSUE = Number(process.env.G5_ISSUE ?? 19);
 const runDir = mkdtempSync(join(tmpdir(), "gates-g5-"));
 const LESSONS_FILE = join(runDir, "g5-lessons.md");
 

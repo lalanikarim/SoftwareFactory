@@ -22,8 +22,8 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdirSync, appendFileSync } from "node:fs";
-import { mkdtemp, writeFileSync } from "node:fs/promises";
+import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -206,7 +206,7 @@ async function runReviewer({ label, branch, issueNumber }) {
       );
       const settled = await api.waitForTask(id, c);
       return {
-        output: [{ type: "text" as const, text: JSON.stringify(settled.state.outcome?.result ?? { error: String(settled.state.status) }) }],
+        output: [{ type: "text", text: JSON.stringify(settled.state.outcome?.result ?? { error: String(settled.state.status) }) }],
       };
     },
   });
@@ -218,7 +218,9 @@ async function runReviewer({ label, branch, issueNumber }) {
     workRoot,
     sandbox: { image, network: "none", allowImages: [image], allowMountRoot: workRoot },
   });
-  const ext = defineExtension({ name: "factory-reviewer", tools: reviewerRoleTools, tasks: [reviewerTaskDef] });
+  // reviewTool must be registry-installed (agent `tools` filters resolve by
+  // name against the registry); unregistered definitions are silently dropped.
+  const ext = defineExtension({ name: "factory-reviewer", tools: [...reviewerRoleTools, reviewTool], tasks: [reviewerTaskDef] });
   const inst = await createCoreInstance({
     config,
     extraExtensions: [ext],
