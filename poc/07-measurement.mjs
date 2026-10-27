@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDotEnv } from "./vendor/engram/poc/lib/env.mjs";
+import { loadDotEnv } from "../vendor/engram/poc/lib/env.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = join(__dirname, "data");

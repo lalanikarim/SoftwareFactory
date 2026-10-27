@@ -18,7 +18,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { ExecutionError, err } from "@earendil-works/pi-durable/env";
-import { PodmanSandboxEnv } from "../vendor/engram/poc/lib/podman-sandbox.mjs";
+import { PodmanSandboxEnv } from "../../vendor/engram/poc/lib/podman-sandbox.mjs";
 import { DEFAULTS } from "./factory-config.mjs";
 
 /** Name prefix of all factory sandbox containers. */

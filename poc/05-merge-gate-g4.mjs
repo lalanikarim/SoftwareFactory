@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactoryDotEnv } from "./lib/factory.mjs";
-import { loadDotEnv } from "./vendor/engram/poc/lib/env.mjs";
+import { loadDotEnv } from "../vendor/engram/poc/lib/env.mjs";
 
 const pExecFile = promisify(execFile);
 async function sh(cmd, args, opts = {}) {
