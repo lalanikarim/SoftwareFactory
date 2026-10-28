@@ -1,6 +1,12 @@
 // Phase 2 / Gate G2 — worker quality on bounded real issues.
 //
-//   node 03-worker-quality-g2.mjs [--issues 1,2,3] [--timeout-min 25]
+//   node gates/g2-worker-quality.mjs [--timeout-min 25] [--preflight-only]
+//   node gates/g2-worker-quality.mjs --issues 34,35 [--allow-existing] [--max-files 6]
+//
+// TARGETS ARE SELECTED BY LABEL, NOT BY NUMBER. With no --issues, every open issue carrying
+// `agent` (override: --target-label) is a target. Each target must also carry exactly one
+// `probe:<key>` label naming its behavior oracle in gates/probes/. Both are resolved at PREFLIGHT,
+// before any inference, so "no oracle for this target" costs seconds instead of a worker run.
 //
 // For each issue: if a draft PR already exists for agent/issue-<n> (and
 // --allow-existing), evaluate it; otherwise run the full unattended chain
@@ -8,10 +14,15 @@
 //
 // Objective checks per issue (no model judgment):
 //   A. test suite passes on the resulting branch;
-//   B. diff is scoped: every changed file under src/ or test/, <= 5 files;
-//   C. the specific behavior named in the issue is fixed (live-server check).
+//   B. diff is scoped: every changed file under src/ or test/, <= --max-files (default 5);
+//   C. the issue's oracle passes against a live server from the candidate branch;
+//   D. zero human edits (PR body carries the factory marker).
 //
-// G2 passes when >= 2 of 3 issues produce a passing, scoped PR with zero human edits.
+// Preflight additionally requires each oracle to FAIL against fixture `main` (fail-to-pass): an
+// oracle that already passes on main judges nothing — the work is merged, or the probe is wrong.
+// Both are preflight failures. --skip-fail-to-pass overrides it; --preflight-only stops here.
+//
+// G2 passes when >= 2 targets (or all of them, when fewer than 2 exist) satisfy A-D.
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -22,6 +33,7 @@ import { join } from "node:path";
 // transform .mjs); types are omitted throughout this file.
 import { startIntakeServer } from "../factory/intake.ts";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath } from "./lib.ts";
+import { loadProbes, probeKeyFromLabels, formatLabels } from "./behavior-probes.mjs";
 
 const pExecFile = promisify(execFile);
 async function sh(cmd, args, opts = {}) {
@@ -34,9 +46,16 @@ const opt = (flag, dflt) => {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : dflt;
 };
-// Second-generation fixture issues (#16–#18); the first generation (1–3) is
-// already merged into main, so re-running it yields "no changes needed".
-const issues = opt("--issues", "16,17,18").split(",").map(Number);
+// Explicit target list overrides label discovery; use it to evaluate one issue without pulling in
+// every open `agent` issue. Numbers still need their `probe:<key>` label.
+const issuesOpt = opt("--issues", "");
+const targetLabel = opt("--target-label", "agent");
+const preflightOnly = argv.includes("--preflight-only");
+// Run every oracle against fixture main and report. Oracles for already-merged work stay in
+// gates/probes/ without a label for exactly this: they are regression checks, and an oracle that
+// silently stops passing on main means the feature it specified broke (or drifted).
+const regression = argv.includes("--regression");
+const skipFailToPass = argv.includes("--skip-fail-to-pass");
 const timeoutMin = Number(opt("--timeout-min", "25"));
 const allowExisting = argv.includes("--allow-existing");
 // Scope bound: 5 held for single-behavior issues, but an issue that adds a ROUTE legitimately
@@ -182,182 +201,21 @@ const api = (base, method, path, body) =>
     body: body ? JSON.stringify(body) : undefined,
   }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
 
-async function checkBehavior(issueNumber, dir) {
-  return withServer(dir, async (base) => {
-    if (issueNumber === 16) {
-      const a = await api(base, "POST", "/invoices", { customerId: "f-c1", amountCents: 10 });
-      const b = await api(base, "POST", "/invoices", { customerId: "f-c2", amountCents: 20 });
-      const c = await api(base, "POST", "/invoices", { customerId: "f-c1", amountCents: 30 });
-      const onlyC1 = await api(base, "GET", "/invoices?customer=f-c1");
-      const miss = await api(base, "GET", "/invoices?customer=no-such-customer");
-      const composed = await api(base, "GET", "/invoices?customer=f-c2&status=open");
-      const all = await api(base, "GET", "/invoices");
-      const c1Ok = onlyC1.status === 200 &&
-        onlyC1.body.invoices.length === 2 &&
-        onlyC1.body.invoices.every((i) => i.customerId === "f-c1") &&
-        onlyC1.body.invoices[0].id < onlyC1.body.invoices[1].id;
-      const missOk = miss.status === 200 && miss.body.invoices.length === 0;
-      const composedOk = composed.status === 200 && composed.body.invoices.length === 1 && composed.body.invoices[0].id === b.body.id;
-      const allOk = all.status === 200 && [a.body.id, b.body.id, c.body.id].every((id) => all.body.invoices.some((i) => i.id === id));
-      return {
-        ok: c1Ok && missOk && composedOk && allOk,
-        detail: `?customer=f-c1 ok=${c1Ok}, miss ok=${missOk}, composed ok=${composedOk}, unfiltered ok=${allOk}`,
-      };
-    }
-    if (issueNumber === 17) {
-      const before = await api(base, "GET", "/summary");
-      await api(base, "POST", "/invoices", { customerId: "s-open", amountCents: 100 });
-      const paid = await api(base, "POST", "/invoices", { customerId: "s-paid", amountCents: 200 });
-      const voided = await api(base, "POST", "/invoices", { customerId: "s-void", amountCents: 999 });
-      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
-      await api(base, "PUT", `/invoices/${voided.body.id}/status`, { status: "voided" });
-      const after = await api(base, "GET", "/summary");
-      return {
-        ok:
-          after.body.invoiceCount === before.body.invoiceCount + 2 &&
-          after.body.totalCents === before.body.totalCents + 300 &&
-          after.body.openCents === before.body.openCents + 100 &&
-          after.body.paidCents === before.body.paidCents + 200 &&
-          after.body.openCents + after.body.paidCents === after.body.totalCents,
-        detail: `count ${before.body.invoiceCount}->${after.body.invoiceCount} (want +2), open ${before.body.openCents}->${after.body.openCents} (want +100), paid ${before.body.paidCents}->${after.body.paidCents} (want +200)`,
-      };
-    }
-    if (issueNumber === 18) {
-      const inv = await api(base, "POST", "/invoices", { customerId: "t-idem", amountCents: 50 });
-      const sameOpen = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "open" });
-      await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
-      const samePaid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
-      const invalid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "voided" });
-      return {
-        ok:
-          sameOpen.status === 200 && sameOpen.body.status === "open" &&
-          samePaid.status === 200 && samePaid.body.status === "paid" &&
-          invalid.status === 409,
-        detail: `open->open ${sameOpen.status} (want 200), paid->paid ${samePaid.status} (want 200), paid->voided ${invalid.status} (want 409)`,
-      };
-    }
-    if (issueNumber === 28) {
-      // Issue: /summary gains openCount/paidCount/voidedCount, existing fields unchanged.
-      const empty = await api(base, "GET", "/summary");
-      await api(base, "POST", "/invoices", { customerId: "c28-open", amountCents: 100 });
-      const paid = await api(base, "POST", "/invoices", { customerId: "c28-paid", amountCents: 200 });
-      const voided = await api(base, "POST", "/invoices", { customerId: "c28-void", amountCents: 300 });
-      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
-      await api(base, "PUT", `/invoices/${voided.body.id}/status`, { status: "voided" });
-      const s = await api(base, "GET", "/summary");
-      const zeroOk = empty.status === 200 && ["openCount", "paidCount", "voidedCount"].every((k) => empty.body[k] === 0);
-      const countsOk = s.status === 200 && s.body.openCount === 1 && s.body.paidCount === 1 && s.body.voidedCount === 1;
-      const keptOk = ["invoiceCount", "totalCents", "openCents", "paidCents"].every((k) => typeof s.body[k] === "number");
-      return {
-        ok: zeroOk && countsOk && keptOk,
-        detail: `empty counts ${JSON.stringify([empty.body.openCount, empty.body.paidCount, empty.body.voidedCount])} (want 0,0,0), after 1/1/1 got ${JSON.stringify([s.body.openCount, s.body.paidCount, s.body.voidedCount])}, totals kept=${keptOk}`,
-      };
-    }
-    if (issueNumber === 29) {
-      // Issue: DELETE voids an open invoice; 409 on paid/voided; 404 unknown.
-      const open = await api(base, "POST", "/invoices", { customerId: "c29", amountCents: 100 });
-      const del = await api(base, "DELETE", `/invoices/${open.body.id}`);
-      const afterDel = await api(base, "GET", `/invoices/${open.body.id}`);
-      const paid = await api(base, "POST", "/invoices", { customerId: "c29b", amountCents: 200 });
-      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
-      const delPaid = await api(base, "DELETE", `/invoices/${paid.body.id}`);
-      const stillPaid = await api(base, "GET", `/invoices/${paid.body.id}`);
-      const missing = await api(base, "DELETE", "/invoices/999999");
-      const voidOk = del.status === 200 && del.body.status === "voided" && afterDel.body.status === "voided";
-      const conflictOk = delPaid.status === 409 && stillPaid.body.status === "paid";
-      const notFoundOk = missing.status === 404;
-      return {
-        ok: voidOk && conflictOk && notFoundOk,
-        detail: `DELETE open ${del.status}/${del.body.status} (want 200/voided), DELETE paid ${delPaid.status} then status=${stillPaid.body.status} (want 409/paid), unknown ${missing.status} (want 404)`,
-      };
-    }
-    if (issueNumber === 33) {
-      // Issue: ?offset=N windows the filtered list; bad offset → 400; past end → empty 200.
-      const ids = [];
-      for (let i = 0; i < 5; i++) {
-        const created = await api(base, "POST", "/invoices", { customerId: `c33-${i}`, amountCents: 100 + i });
-        ids.push(created.body.id);
-      }
-      const win = await api(base, "GET", "/invoices?offset=2&limit=2");
-      const zero = await api(base, "GET", "/invoices?offset=0&limit=2");
-      const absent = await api(base, "GET", "/invoices?limit=2");
-      const pastEnd = await api(base, "GET", "/invoices?offset=99");
-      const badOffset = await api(base, "GET", "/invoices?offset=-1");
-      const badText = await api(base, "GET", "/invoices?offset=abc");
-      const winOk = win.status === 200 && JSON.stringify(win.body.invoices.map((i) => i.id)) === JSON.stringify(ids.slice(2, 4));
-      const sameOk = zero.status === 200 && absent.status === 200 && JSON.stringify(zero.body.invoices.map((i) => i.id)) === JSON.stringify(absent.body.invoices.map((i) => i.id));
-      const emptyOk = pastEnd.status === 200 && Array.isArray(pastEnd.body.invoices) && pastEnd.body.invoices.length === 0;
-      const rejectOk = badOffset.status === 400 && badText.status === 400;
-      return {
-        ok: winOk && sameOk && emptyOk && rejectOk,
-        detail: `offset=2&limit=2 -> ${JSON.stringify(win.body.invoices?.map((i) => i.id))} (want ${JSON.stringify(ids.slice(2, 4))}), offset=0==absent=${sameOk}, past end ${pastEnd.status}/len${pastEnd.body.invoices?.length}, offset=-1 ${badOffset.status} & abc ${badText.status} (want 400)`,
-      };
-    }
-    if (issueNumber === 34) {
-      // Issue: PATCH /invoices/:id edits amountCents only while open; other fields rejected.
-      const open = await api(base, "POST", "/invoices", { customerId: "c34", amountCents: 100 });
-      const patched = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: 250 });
-      const paid = await api(base, "POST", "/invoices", { customerId: "c34b", amountCents: 300 });
-      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
-      const patchPaid = await api(base, "PATCH", `/invoices/${paid.body.id}`, { amountCents: 1 });
-      const paidAfter = await api(base, "GET", `/invoices/${paid.body.id}`);
-      const badAmount = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: -5 });
-      const afterBad = await api(base, "GET", `/invoices/${open.body.id}`);
-      const smuggled = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: 500, status: "paid" });
-      const smuggledAfter = await api(base, "GET", `/invoices/${open.body.id}`);
-      const missing = await api(base, "PATCH", "/invoices/999999", { amountCents: 10 });
-      const editOk = patched.status === 200 && patched.body.amountCents === 250;
-      const immutableOk = patchPaid.status === 409 && paidAfter.body.amountCents === 300;
-      const validateOk = badAmount.status === 400 && afterBad.body.amountCents === 250;
-      const noSmuggleOk = smuggled.status === 400 && smuggledAfter.body.status === "open" && smuggledAfter.body.amountCents === 250;
-      const notFoundOk = missing.status === 404;
-      return {
-        ok: editOk && immutableOk && validateOk && noSmuggleOk && notFoundOk,
-        detail: `PATCH open ${patched.status} amount=${patched.body.amountCents} (want 200/250), PATCH paid ${patchPaid.status} amount=${paidAfter.body.amountCents} (want 409/300), bad amount ${badAmount.status} kept=${afterBad.body.amountCents} (want 400/250), smuggled status ${smuggled.status} status=${smuggledAfter.body.status} (want 400/open), unknown ${missing.status} (want 404)`,
-      };
-    }
-    if (issueNumber === 35) {
-      // Issue: invoices carry history [{from,to}], rejected transitions append nothing.
-      const inv = await api(base, "POST", "/invoices", { customerId: "c35", amountCents: 100 });
-      const created = await api(base, "GET", `/invoices/${inv.body.id}`);
-      const createdOk = Array.isArray(created.body.history) && created.body.history.length === 1 &&
-        created.body.history[0].from === null && created.body.history[0].to === "open";
-      const toPaid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
-      const appendedOk = Array.isArray(toPaid.body.history) && JSON.stringify(toPaid.body.history.at(-1)) === JSON.stringify({ from: "open", to: "paid" });
-      const beforeRejected = JSON.stringify((await api(base, "GET", `/invoices/${inv.body.id}`)).body.history);
-      const rejected = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "voided" });
-      const afterRejected = JSON.stringify((await api(base, "GET", `/invoices/${inv.body.id}`)).body.history);
-      const cleanOk = rejected.status >= 400 && beforeRejected === afterRejected;
-      return {
-        ok: createdOk && appendedOk && cleanOk,
-        detail: `created history ${JSON.stringify(created.body.history)} (want [{from:null,to:"open"}]), after paid last=${JSON.stringify(toPaid.body.history?.at(-1))} (want {from:"open",to:"paid"}), rejected ${rejected.status} unchanged=${cleanOk}`,
-      };
-    }
-    if (issueNumber === 36) {
-      // Issue: bodies over 64 KiB → 413 while streaming; small/empty bodies unaffected.
-      const big = await api(base, "POST", "/invoices", { customerId: "c36", amountCents: 100, note: "x".repeat(70_000) });
-      const small = await api(base, "POST", "/invoices", { customerId: "c36-small", amountCents: 100 });
-      const emptyBody = await api(base, "POST", "/invoices", undefined);
-      const stillUsable = await api(base, "GET", "/health");
-      const tooBigOk = big.status === 413;
-      const smallOk = small.status === 201;
-      const emptyOk = emptyBody.status !== 413 && emptyBody.status < 500;
-      const usableOk = stillUsable.status === 200;
-      return {
-        ok: tooBigOk && smallOk && emptyOk && usableOk,
-        detail: `70 KB body ${big.status} (want 413), small POST ${small.status} (want 201), empty body ${emptyBody.status} (want not-413/<500), connection usable after=${usableOk}`,
-      };
-    }
-    throw new Error(`no behavior check defined for issue #${issueNumber}`);
-  });
+// Run an issue's behavior oracle against a booted checkout of the candidate branch.
+// The oracle itself lives in gates/probes/<key>.mjs and is selected by the issue's
+// `probe:<key>` label — see gates/behavior-probes.mjs for why this replaced per-issue-number
+// if-blocks (a missing oracle used to surface only after a full worker run).
+async function runProbe(probe, dir) {
+  return withServer(dir, (base) => probe.check({ base, api }));
 }
 
-async function evaluateIssue(issueNumber) {
+async function evaluateIssue(target, probe) {
+  const issueNumber = target.number;
   const branch = `agent/issue-${issueNumber}`;
   const dir = await cloneBranch(branch);
   const suite = await runSuite(dir);
   const scope = await checkScope(dir);
-  const behavior = await checkBehavior(issueNumber, dir);
+  const behavior = await runProbe(probe, dir);
   // Zero human edits: the PR was opened by the factory (marker in body) and we never touched it.
   let zeroEdits = true;
   try {
@@ -370,15 +228,155 @@ async function evaluateIssue(issueNumber) {
     }
   } catch { /* no PR — treat as not verified */ zeroEdits = false; }
   const passed = suite.passed && scope.ok && behavior.ok && zeroEdits;
-  return { issueNumber, branch, suite, scope, behavior, zeroEdits, passed };
+  return { issueNumber, title: target.title, labels: target.labels, probeKey: probe.key, branch, suite, scope, behavior, zeroEdits, passed };
 }
 
 // ---------------------------------------------------------------------------
-console.log(`G2 battery: issues ${issues.join(", ")} (timeout ${timeoutMin}min each)`);
-for (const n of issues) {
+// Target resolution + preflight. Everything here runs before a single inference call.
+// ---------------------------------------------------------------------------
+async function fetchIssue(number) {
+  const out = await sh("gh", ["api", `repos/${fixturesRepo}/issues/${number}`, "--jq",
+    "{number,title,state,labels:[.labels[].name]}"]);
+  return JSON.parse(out);
+}
+
+async function listOpenIssueNumbers() {
+  const out = await sh("gh", ["api", `repos/${fixturesRepo}/issues?state=open&per_page=100`, "--jq", "[.[].number]"]);
+  return new Set(JSON.parse(out || "[]"));
+}
+
+async function discoverTargets() {
+  const out = await sh("gh", ["api",
+    `repos/${fixturesRepo}/issues?state=open&labels=${encodeURIComponent(targetLabel)}&per_page=100`,
+    "--jq", "[.[] | {number,title,labels:[.labels[].name]}]"]);
+  return JSON.parse(out || "[]");
+}
+
+/** -> { targets: [{ issue, probe }], problems: string[] } */
+async function resolveTargets(probes) {
+  const numbers = issuesOpt ? issuesOpt.split(",").map((s) => Number(s.trim())).filter(Number.isFinite) : (await discoverTargets()).map((i) => i.number);
+  if (numbers.length === 0) {
+    return { targets: [], problems: [`no open issues labeled "${targetLabel}" in ${fixturesRepo} — label a target or pass --issues`] };
+  }
+  const targets = [];
+  const problems = [];
+  for (const n of numbers) {
+    let issue;
+    try {
+      issue = await fetchIssue(n);
+    } catch (e) {
+      problems.push(`#${n}: not readable (${e.message.split("\n")[0]})`);
+      continue;
+    }
+    let key;
+    try {
+      key = probeKeyFromLabels(issue.labels);
+    } catch (e) {
+      problems.push(`#${n}: ${e.message}`);
+      continue;
+    }
+    if (!key) {
+      problems.push(`#${n} "${issue.title}" has no probe:<key> label — add the oracle label or drop it as a target`);
+      continue;
+    }
+    const probe = probes.get(key);
+    if (!probe) {
+      problems.push(`#${n}: probe:${key} has no module in gates/probes/ (typo, or the oracle was deleted)`);
+      continue;
+    }
+    targets.push({ issue, probe });
+  }
+  return { targets, problems };
+}
+
+/** Every oracle must fail against main, or it is not an oracle. */
+async function checkFailToPass(targets) {
+  const dir = await cloneBranch("main");
+  const problems = [];
+  for (const { issue, probe } of targets) {
+    let res;
+    try {
+      res = await runProbe(probe, dir);
+    } catch (e) {
+      problems.push(`#${issue.number}: oracle ${probe.key} errored against main (${e.message.split("\n")[0]})`);
+      continue;
+    }
+    if (res.ok) problems.push(`#${issue.number}: oracle ${probe.key} already PASSES on main — the work is merged or the probe is vacuous`);
+  }
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+const probes = await loadProbes();
+
+if (regression) {
+  // Oracles with no live target specify MERGED work: they must still hold against main.
+  // Claimed oracles are expected to fail there (that is what makes their issue a target), so
+  // they never count as regressions — but one that passes on main means the work landed and the
+  // target is stale, which gets reported.
+  const { targets: live } = await resolveTargets(probes);
+  const claimed = new Map(live.map((t) => [t.probe.key, t.issue.number]));
+  const openIssues = await listOpenIssueNumbers();
+  const dir = await cloneBranch("main");
+  let regressed = 0;
+  console.log(`G2 regression: ${probes.size} oracles against ${fixturesRepo}@main (${live.length} claimed by live targets)`);
+  for (const probe of probes.values()) {
+    let res;
+    try {
+      res = await runProbe(probe, dir);
+    } catch (e) {
+      res = { ok: false, detail: e.message.split("\n")[0] };
+    }
+    const claim = claimed.get(probe.key);
+    if (claim !== undefined) {
+      console.log(`  ${res.ok ? "STALE" : "open "} #${claim} ${probe.key}: ${res.ok ? "oracle already passes on main — target is implemented, retarget or close it" : "expected to fail until the target lands"}`);
+    } else if (res.ok) {
+      console.log(`  ok      ${probe.key}: ${res.detail}`);
+    } else if (probe.sourceIssue !== undefined && openIssues.has(probe.sourceIssue)) {
+      // Not a regression: this behavior was never shipped. Issue #18 is exactly this case — an
+      // open draft PR, so main still fails the oracle. It IS a missing target, so say so.
+      console.log(`  UNTARGET #${probe.sourceIssue} ${probe.key}: unsatisfied on main and its issue is still open — label it (agent + probe:${probe.key}) or close the issue`);
+    } else {
+      regressed += 1;
+      console.log(`  REGRESS ${probe.key}${probe.sourceIssue !== undefined ? ` (specified by #${probe.sourceIssue}, now closed)` : ""}: ${res.detail}`);
+    }
+  }
+  console.log(`\nG2 regression ${regressed === 0 ? "PASS" : `FAIL — ${regressed} oracle(s) no longer hold against main`}`);
+  process.exit(regressed === 0 ? 0 : 1);
+}
+
+console.log(`G2 preflight: ${probes.size} oracles loaded; targets from ${issuesOpt ? `--issues ${issuesOpt}` : `label "${targetLabel}"`}`);
+const { targets, problems: resolveProblems } = await resolveTargets(probes);
+let problems = resolveProblems;
+if (targets.length > 0 && !skipFailToPass) {
+  const ftp = await checkFailToPass(targets);
+  problems = problems.concat(ftp);
+}
+const claimed = new Set(targets.map((t) => t.probe.key));
+for (const { issue, probe } of targets) {
+  console.log(`  #${issue.number} [${formatLabels(issue.labels)}] -> ${probe.key}: ${probe.title}`);
+}
+const unclaimed = [...probes.keys()].filter((k) => !claimed.has(k));
+if (unclaimed.length) {
+  console.log(`  (${unclaimed.length} further oracles cover merged work — run --regression to re-check them against main)`);
+}
+for (const p of problems) console.log(`  PROBLEM ${p}`);
+if (preflightOnly) {
+  console.log(problems.length ? `\nG2 preflight: ${problems.length} problem(s)` : `\nG2 preflight OK — ${targets.length} target(s), all oracles fail against main`);
+  process.exitCode = problems.length ? 1 : 0;
+  process.exit(problems.length ? 1 : 0);
+}
+if (problems.length) {
+  console.error(`\nG2 PREFLIGHT FAILED (${problems.length} problem(s)) — nothing was run, so no worker time was spent on unresolvable targets`);
+  process.exit(2);
+}
+
+console.log(`G2 battery: issues ${targets.map((t) => t.issue.number).join(", ")} (timeout ${timeoutMin}min each)`);
+for (const { issue, probe } of targets) {
+  const n = issue.number;
   try {
     const run = await runIssue(n);
-    const evaln = await evaluateIssue(n);
+    const evaln = await evaluateIssue(issue, probe);
     results.push({ ...run, ...evaln });
     const suiteStr = evaln.suite.passed ? `pass ${evaln.suite.pass}/${evaln.suite.fail}` : "FAIL";
     const scopeStr = evaln.scope.ok
@@ -395,7 +393,7 @@ for (const n of issues) {
 }
 
 const passCount = results.filter((r) => r.passed).length;
-const total = issues.length;
+const total = targets.length;
 const gate = passCount >= 2 && total === 3 ? "PASS" : passCount >= Math.min(2, total) ? `PASS (${passCount}/${total})` : "FAIL";
 console.log(`\nG2 ${gate} — ${passCount}/${total} issues produced a passing, scoped PR with zero human edits`);
 for (const r of results) console.log(`  #${r.issueNumber}: ${r.passed ? "PASS" : `FAIL${r.error ? ` (${r.error})` : ""}`}`);

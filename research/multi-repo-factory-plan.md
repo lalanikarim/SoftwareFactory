@@ -248,7 +248,7 @@ Posture under test: `main` = `2596e9e` (kernel pin `v0.2.0`, `containment:"sandb
 
 **Six harness defects found while running it** — all fixed here, and each one is the kind of thing that only surfaces when the battery is run end-to-end on a tree where the *fixtures* have moved on:
 
-1. **G2 could not evaluate any issue other than #16–#18.** `checkBehavior()` throws for unknown issues, so newly seeded targets reported `RUN FAIL — no behavior check defined` after a perfectly good worker run. Behavior checks added for #28, #29, #33, #34, #35, #36 (spec-derived from each issue's acceptance criteria, not from the implementation).
+1. **G2 could not evaluate any issue other than #16–#18.** `checkBehavior()` throws for unknown issues, so newly seeded targets reported `RUN FAIL — no behavior check defined` after a perfectly good worker run. Behavior checks added for #28, #29, #33, #34, #35, #36 (spec-derived from each issue's acceptance criteria, not from the implementation) — and then **removed as a design** in favor of label-keyed oracles, see §5.10.
 2. **G2's scope bound was hardcoded and its failure message ambiguous.** Now `--max-files` (default unchanged at 5) and the output distinguishes *out of scope* files from *too many* files. Finding rather than defect: an issue that adds a route legitimately spans six files (`server.mjs`, `invoices.mjs`, `store.mjs`, two test files, README).
 3. **G3's T3 "closed loop" leg was vacuous and unasserted.** It hardcoded issue #4 — merged long ago — so the worker produced nothing, it printed `verdict=null draftPR=false gateHeld=false` for ~100 s, and the gate still reported PASS because T3 was never in the verdict. Now parameterized (`--t3-issue`) and a leg that runs without producing a verdict **fails** the gate; verified live on #36.
 4. **G3's T2 positive control is also going stale (open).** `agent/issue-1` is merged into main, so its diff vs main is empty — the reviewer said so twice ("git_diff returned an empty changed-file list") and passed it by inspecting state instead of a delta. Needs a policy decision on what "known good" means once branches land; not fixed here.
@@ -256,5 +256,31 @@ Posture under test: `main` = `2596e9e` (kernel pin `v0.2.0`, `containment:"sandb
 6. **M4's default budget was longer than a typical successful run.** With `M4_BUDGET_SECS=120`, bounded fixture issues finish first, no abort ever fires, and the script waits out its full 20-minute delegate-wait with no diagnostic. Default lowered to 30 s (verified: clean abort, zero side effects) with a comment stating the invariant.
 
 **Fixture bookkeeping.** Targets were seeded as ordinary issues *without* the `agent` label (`factory-fixture` #33 offset paging, #34 PATCH amountCents, #35 status history, #36 413 body cap, #42 `totalCount`, #44 customer-scoped summary, #45 sort; `factory-fixture-2` #18 `?status=` filter, #19 unknown `?priority=` → 400). G1/G2 synthesize the `agent` label inside the webhook event they deliver, so no fixture labeling is needed to drive them. One real defect was found while probing for G5 material and is now fixed by the G5 run: `PUT /invoices/:id/status` with an unknown status returned **500** instead of 4xx (bare `TypeError` from the store translated per-handler) — that is fixture issue #19, still open as a draft PR (#43).
+
+### 5.10 G2's behavior oracles are label-keyed, not issue-number-keyed (2026-10-28)
+
+The nine `if (issueNumber === N)` blocks inside `gates/g2-worker-quality.mjs` were the harness's worst coupling: they hardwired fixture issue numbers into gate code, and a target without a block only announced itself **after** a full worker run (`RUN FAIL — no behavior check defined for issue #34`). They are now twelve modules in `gates/probes/`, selected by labels.
+
+| Label | Role |
+|---|---|
+| `agent` | **selection** — the same label production intake already gates on, deliberately reused rather than inventing a second selection label that could drift from it. No `--issues` flag means "every open `agent` issue is a target". |
+| `probe:<key>` | **oracle key** — exactly one per issue; names `gates/probes/<key>.mjs`. Two is an error (two oracles for one issue means nobody knows which judges it). |
+
+Preflight resolves everything **before any inference call** and fails on: a target with no `probe:*` label; a `probe:*` label with no module (typo, or an oracle deleted under review); more than one probe label; and — the strong one — **an oracle that already passes against fixture `main`**. That last check is fail-to-pass: an oracle which holds on main specifies nothing outstanding, so either the work merged (stale target) or the probe is vacuous. It also caught three brand-new probes in the act of being wrong-or-right rather than letting them quietly judge nothing. `--preflight-only` stops there; `--skip-fail-to-pass` overrides it.
+
+`--regression` runs every oracle against main and classifies: oracles with no live target specify **shipped** work and must still hold (`REGRESS` = a feature broke); an oracle that fails on main while its issue is still open is `UNTARGET` (unsatisfied, should be labeled); one that passes while its issue is a live target is `STALE`. This needed a third category because of what it found immediately: **fixture issue #18 (idempotent status transitions) is not satisfied on main** — its draft PR #27 was opened during the Phase 2 work and never merged, so the oracle failed while the issue stayed open. That is exactly the state a number-keyed harness hides; #18 is now a labeled live target.
+
+Two deliberate choices worth keeping:
+
+- **Oracles live in drydock, not in the fixture repo.** The oracle must not be reachable by the pipeline whose work it judges — a spec an agent can edit is a tautology waiting to happen. Adding or changing an oracle is therefore a reviewed PR here, never a fixture edit. (`sourceIssue` on each module is provenance only — used for regression classification, never for selection.) Caveat recorded honestly: worker bash runs `network=none` and pushes happen orchestrator-side in `factory/open-draft-pr.ts`, so this is tautology-avoidance and defense-in-depth, not a hostile-actor control; labels are GitHub state readable by the instance token, which is why they are resolved once at preflight rather than re-read mid-run.
+- **`withServer` still hardcodes `src/server.mjs`**, so oracles only cover `factory-fixture` today. Fixture-2 needs its entry point parameterized (a `serve:<entry>` label or per-repo config) before G2 can judge it — known gap, not a regression.
+
+Current fixture posture: 6 live targets (`#18`, `#34`, `#35`, `#42`, `#44`, `#45`), 6 further oracles held as regression checks for merged work; verified with `--preflight-only` (all six fail against main) and `--regression` (PASS).
+
+```
+node --experimental-strip-types gates/g2-worker-quality.mjs --preflight-only      # resolve + fail-to-pass
+node --experimental-strip-types gates/g2-worker-quality.mjs                        # label-discovered full run
+node --experimental-strip-types gates/g2-worker-quality.mjs --regression           # oracles vs main
+```
 
 **Remaining measurement gap (honest).** The gates record wall time but **not tokens**, so this table cannot be compared token-for-token against the §5.4 numbers (baseline ~81–145K, post-migration 119–220K per issue). The data exists — per-entry `totalTokens` is persisted in the instance's durable store (`entries.record`) — it is simply never snapshotted before the gate tears the instance down. Concrete fix: a helper in `gates/lib.ts` that sums `totalTokens` over the run's conversation tree and returns it alongside `wallSecs`, called by each gate before `instance.close()`. Also unmeasured: contention with >2 concurrent factories on one endpoint, and any model other than the single 27B GGUF we run.
