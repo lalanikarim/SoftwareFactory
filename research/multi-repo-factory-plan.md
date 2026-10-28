@@ -199,3 +199,16 @@ _Date: 2026-10-26 · Status: Phase 0 complete — Phase 1 pending start. Full is
 - **§3.9 T1 (partial-run recovery) stays parked** until after migration — the resume/requeue design is cleaner on the core's task machinery.
 - **Target 2 (§4) becomes the board/collective story:** engram's Project 0 board + Collective A1–A4 (member domain memory, peer trust tiers, untrusted peer input, containment of a bad member) are built and tested upstream; per-repo instances become members via the M2 federation seam. Revisit the §4.4 decision rule after Phase 3.
 - PRs #28 (approval TTL) and #29 (sandbox allowlist) are **absorbed by the core** once Phases 1–3 land — they were manual ports of exactly the machinery the composition now provides; their tests move with the code or are retired at cutover.
+
+### 5.7 Post-cutover roadmap (agreed 2026-10-28, after PR #35)
+
+Migration Phases 0–3 are DONE and merged (`main` = `acbfdb5`). Remaining work, in priority order:
+
+| # | Item | Why it matters | Status |
+|---|---|---|---|
+| N1 | **Bash DESTRUCTIVE misclassification** — repro the compound-command blocks against pin `51b4d39`, root-cause (core built-in approvals default rules vs factory `gates.json` tier policy), fix factory-side or file upstream | Only known blocker to fully unattended fleets (observed twice in M2/M4; workers self-recovered by rephrasing) | **Next up** |
+| N2 | **Full-battery confirmation run + Phase 6 metrics** — G0–G5 + M1/M2/M4 back-to-back on the final tree; consolidated wall/token table | Closes the two open honesty items: G1's 597 s drift vs the 433 s ceiling, and replacing piecemeal per-gate numbers with one post-migration table | Open |
+| N3 | **Drydock dogfooding** — onboard drydock as a managed repo under its own factory: per-repo config (`setupCommand`, submodule-aware clone), branch protection on `main`, real webhook secret + GitHub webhook, first self-assigned issue end-to-end | Original goal of the whole exercise; also the moment the **live webhook path** gets real (adapter is built + unit-tested, but every gate so far posts `/tasks` directly — no live GitHub signature has ever been verified) | Open |
+| N4 | **Pin discipline script** (Phase 4) — single `gates/all.mjs` runner re-validating the suite per submodule bump | Makes the SHA-pin stability contract mechanical instead of ritual | Open |
+| N5 | **engram #44 watch** — `ConversationMeta`/`SandboxManager` on the core seam; then remove the TEMP import in `factory/worker.ts` and revisit dead-container supervision (#20) | Last known boundary gap to vendored internals | Blocked upstream |
+| N6 | **T1 partial-run recovery (§3.9)** — resume/requeue design on the core's task machinery | Parked until post-migration; migration is now done | Unblocked, not started |
