@@ -15,8 +15,9 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "../vendor/engram/app/src/config.ts";
-import { createCoreInstance } from "../vendor/engram/app/src/core.ts";
+import { instanceGatesConfig } from "./gate-policy.ts";
+// Both symbols come from the kernel's declared public surface (app/src/core.ts), not internal modules.
+import { createCoreInstance, loadConfig } from "../vendor/engram/app/src/core.ts";
 import { loadFactoryConfig } from "./factory-config.ts";
 import { factoryPipeline, ORCHESTRATOR_INSTRUCTIONS } from "./pipeline.ts";
 
@@ -99,16 +100,11 @@ async function main() {
   const workRoot = join(root, "work");
   for (const d of [dataDir, configDir, workRoot]) mkdirSync(d, { recursive: true });
 
-  // Factory-owned gate policy for this instance: merge_pr is the only gated
-  // tool (prompt tier → blocked until a human approves its key; D2: no
-  // single-use consumption — idempotency comes from the verified PR state
-  // inside the tool). Worker bash is deliberately UNGATED: containment is the
-  // sealed Podman sidecar (network=none, workspace-only mount), so gating it
-  // would stall unattended runs.
-  // NOTE: do NOT add a destructivePattern matching {"issueNumber":N} —
-  // delegate() has the identical arg shape and would be blocked too.
+  // Factory-owned gate policy (see factory/gate-policy.ts for why merge_pr is prompt-tiered
+  // and bash declares containment:"sandbox"). Written verbatim from the shared object so the
+  // boot test and production cannot drift.
   const gatesPath = join(configDir, "gates.json");
-  writeFileSync(gatesPath, JSON.stringify({ tiers: [{ tool: "merge_pr" }] }, null, 2));
+  writeFileSync(gatesPath, JSON.stringify(instanceGatesConfig(), null, 2));
 
   const image = factoryCfg.sandboxImage ?? process.env.FACTORY_SANDBOX_IMAGE ?? "factory-sandbox:latest";
   // Per-instance declarative files (gates.json) are read from configDir —

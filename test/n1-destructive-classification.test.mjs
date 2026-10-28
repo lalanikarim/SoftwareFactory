@@ -28,9 +28,13 @@ import {
 } from "../vendor/engram/app/src/extensions/gates.ts";
 import { approvalHook } from "../vendor/engram/app/src/extensions/approvals.ts";
 
-// The exact policy factory/main.ts writes into every instance's gates.json.
-const FACTORY_GATES = { tiers: [{ tool: "merge_pr" }] };
-const gates = compileGates(FACTORY_GATES);
+// A minimal policy with bash ABSENT from the tier table, used to measure the kernel's floor in
+// isolation. Production no longer looks like this: since issue #40 it declares
+// {tool:"bash", containment:"sandbox"} (see factory/gate-policy.ts + test/gate-policy.test.mjs),
+// which adds a prompt tier for uncontained conversations and suppresses everything for sandboxed
+// ones — that path is covered by suite D here.
+const MINIMAL_GATES = { tiers: [{ tool: "merge_pr" }] };
+const gates = compileGates(MINIMAL_GATES);
 const tierOf = (command, g = gates) => evaluateGate(g, "bash", { command });
 
 // A stub of the hook's execution api: one object satisfying both doc readers (ApprovalRulesDoc
@@ -45,8 +49,8 @@ const blockFor = async (command, g, sandboxed = false) => {
 
 // ---------------------------------------------------------------- A. safety floor holds
 
-test("A1: the destructive floor applies even though bash has no tier entry", () => {
-  assert.equal(gates.tiers.has("bash"), false, "factory policy must not gate bash");
+test("A1: the destructive floor applies even with bash absent from the tier table", () => {
+  assert.equal(gates.tiers.has("bash"), false, "this suite measures the floor itself");
   for (const command of ["rm -rf /tmp/x", "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=disk bs=1M", ":(){ :|:& };:"]) {
     assert.equal(tierOf(command), "destructive", `expected destructive: ${command}`);
   }
@@ -115,7 +119,7 @@ test("C1: PIN CHARACTERIZATION v0.2.0 — benign commands run, real destruction 
 });
 
 test("C2: PIN CHARACTERIZATION v0.2.0 — the built-in floor is still not removable by config alone", () => {
-  const withExtra = compileGates({ ...FACTORY_GATES, destructivePatterns: ["\\bpay_money\\b"] });
+  const withExtra = compileGates({ ...MINIMAL_GATES, destructivePatterns: ["\\bpay_money\\b"] });
   assert.ok(withExtra.destructive.length > DEFAULT_DESTRUCTIVE_PATTERNS.length, "destructivePatterns is append-only");
   // RegExp.source re-escapes "/" as "\/", so compare against the same normalization.
   const src = (p) => new RegExp(p).source;
@@ -148,15 +152,20 @@ test("D3: hook honors the declaration for a sandboxed conversation and refuses t
   assert.match(await blockFor("rm -rf /var", g, false), /classified DESTRUCTIVE/);
 });
 
-// ------------------------------------------------- E. factory-side stopgap: worker shell hygiene
+// ------------- E. factory posture: the guard + containment declaration are the control, not prose
 
-test("E1: the worker prompt tells the model to avoid the shapes that still block", async () => {
+test("E1: the worker prompt carries no destructive-guard workarounds (issue #40)", async () => {
   const { workerPrompt } = await import("../factory/worker.ts");
   const prompt = workerPrompt({ issueNumber: 7, issueText: "Add pagination" });
-  for (const needle of ["/dev/null", "rm -rf", "git reset --hard", "git push --force"]) {
-    assert.ok(prompt.includes(needle), `worker prompt must mention ${needle}`);
+  // Belt-and-braces prompt rules were the stopgap for pre-v0.2.0 false positives. With command
+  // matching fixed and containment declared (factory/gate-policy.ts), keeping them would hide
+  // whether safety came from the guard or from the model complying — so they must stay gone.
+  for (const gone of ["Shell hygiene", "/dev/null", "DROP TABLE", "shutdown", "reboot"]) {
+    assert.ok(!prompt.includes(gone), `worker prompt must not carry guard workarounds: ${gone}`);
   }
-  assert.match(prompt, /destructive/, "and name the guard it is avoiding");
+  // The workspace contract is unrelated to the guard and must survive.
+  assert.match(prompt, /Stay on branch/, "branch contract is still prompt-enforced");
+  assert.match(prompt, /do not push/i, "no-remote rule is still prompt-enforced");
 });
 
 // ------------------- F. known narrowings at v0.2.0 (asserted as-is; see the upstream review note)
