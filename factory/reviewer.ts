@@ -26,9 +26,9 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineTask, defineTool, type Context, type ToolExecutionApi } from "@earendil-works/pi-durable";
-// TEMP until engram issue #44 lands: the sandbox flag doc is internal to the
-// core's app; switch to a core.ts export when it exists.
-import { ConversationMeta } from "../vendor/engram/app/src/meta.ts";
+// ConversationMeta is part of the kernel's declared public surface (app/src/core.ts;
+// engram #44 closed in v0.2.0) — reach it through that seam, not the internal module.
+import { ConversationMeta } from "../vendor/engram/app/src/core.ts";
 import { runSetupInContainer } from "./setup-sandbox.ts";
 import { awaitIdleWithinBudget } from "./budgets.ts";
 

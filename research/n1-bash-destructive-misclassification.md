@@ -1,6 +1,6 @@
 # N1 — Bash DESTRUCTIVE misclassification (root cause + fix)
 
-**Compiled:** 2026-10-28 · **Core pin:** `lalanikarim/engram@51b4d39076edb1653cb55ec14aa8be032384b8ac` (`51b4d39`) · **Status:** root-caused; factory-side stopgap shipped; upstream fix requested → [engram#53](https://github.com/lalanikarim/engram/issues/53)
+**Compiled:** 2026-10-28 · **Core pin:** `lalanikarim/engram@51b4d39076edb1653cb55ec14aa8be032384b8ac` (`51b4d39`) · **Status:** **RESOLVED** — fixed upstream in kernel v0.2.0 ([engram#53](https://github.com/lalanikarim/engram/issues/53) closed by PR #57); pin bumped and verified on `chore/engram-v020-pin`. See §8 for the measured before/after and what changed here. (Everything above §8 is kept as the original investigation record, including the parts the fix made obsolete.)
 
 Companion to `multi-repo-factory-plan.md` §5.7 item N1 — the only known blocker to fully unattended fleets.
 
@@ -120,3 +120,34 @@ Filed 2026-10-28; the published issue adds a runnable version of the repro (each
 - The stopgap is prompt-level: a model that ignores the hygiene rule still stalls. Detection today is manual (`fleet/supervisor.ts status` reports `awaiting-approval`). **Candidate follow-up:** a gate/alert that fails loudly when an instance holds a pending approval with `tool === "bash"` for more than N minutes — that turns a silent stall into a visible failure regardless of whose fix lands.
 - `rm -rf node_modules && npm install` remains blocked; the worker prompt now avoids it, but real repos with lockfile churn may need it (setup runs happen factory-side in `setup-sandbox.ts`, outside tool gating, which is why no run has hit this yet).
 - Upstream fix, when it lands, must be re-validated against pin discipline (plan N4): suites A/C of the new test are the tripwire.
+
+---
+
+## 8. Resolution — fixed upstream in kernel v0.2.0 (2026-10-28)
+
+[engram#53](https://github.com/lalanikarim/engram/issues/53) was accepted and closed by engram PR #57 (`a764e36`, tagged `v0.2.0`), implementing both asks — and [engram#44](https://github.com/lalanikarim/engram/issues/44) landed in the same branch.
+
+**Ask 1 (match commands, not substrings):** bash lines are reduced to simple-command candidates before pattern matching — quote-aware split on `&&`/`||`/`|`/`;`/`&`/newline, `/dev/*` redirections dropped, quoted spans masked *unless* the head is a shell interpreter or `eval` (then the quoted text is tested as live code); `reboot`/`shutdown` were removed from the global pattern list and now count only in command-head position (after `VAR=` assignments and `sudo`). Non-bash tools keep conservative canonical-JSON matching.
+
+**Ask 2 (declarable floor):** a tier may declare `"containment": "sandbox"`; when that conversation runs sandboxed (`ConversationMeta.sandbox === true`) the tool is ungated there — the sealed container is the protection. It is declarable and loud (`compileGates` warns at startup listing every containment-declared tool; suppression logs once per conversation/tool), and **uncontained conversations keep the absolute floor**. Free-form pattern exclusion was deliberately not added; agreed — tokenization removed its justification and a pattern-level opt-out could carve holes on uncontained hosts.
+
+**Measured, using the released code against our own policy** (`{tiers:[{tool:"merge_pr"}]}`, run out-of-tree so nothing in the repo changed):
+
+| Command | `51b4d39` | `v0.2.0` |
+|---|---|---|
+| `npm ci >/dev/null 2>&1` | destructive | **ungated** |
+| `cd /sandbox && npm test 2>/dev/null` | destructive | **ungated** |
+| `grep -rn 'shutdown' src/` | destructive | **ungated** |
+| SQL text inside a string literal | destructive | **ungated** |
+| heredoc/printf writing a script containing `rm -rf` | destructive | **ungated** |
+| `rm -rf node_modules && npm install` | destructive | destructive (correct — it *is* `rm -rf`) |
+| `rm -rf /var`, `mkfs.ext4`, `dd if=`, `git push --force`, `git reset --hard`, fork bomb | destructive | destructive |
+| chains (`ls && rm -rf /data`), `sudo rm -rf`, `FOO=bar rm -rf`, `find \| xargs rm -rf`, `sh -c "rm -rf …"`, `echo $(rm -rf …)`, backticks | destructive | destructive |
+
+Hook-level confirmation of the containment path: with `{tool:"bash",containment:"sandbox"}` declared and a sandboxed conversation, `rm -rf /var` and `shutdown -h now` pass; with the same policy and an uncontained conversation they block (`prompt` for benign, `destructive` for real destruction) — i.e. the fallback is safe-by-stall.
+
+**Two narrowings introduced by the fix** (found by probing; asserted as characterization in suite F so we notice if upstream tightens them). Neither is our exposure — worker bash runs inside the sealed sidecar — but both weaken the floor for uncontained consumers, so they are worth an upstream review note (plan item N8): quoted payloads through non-shell interpreter heads classify as data (`python3 -c "import os; os.system('rm -rf /tmp/x')"`, `node -e "require('fs').rmSync('/tmp/x',{recursive:true})"` → ungated), and the redirection drop is broad enough that `echo payload > /dev/sda` → ungated, which the old `>\s*/dev/` pattern used to catch. Suggested: extend the live-code head table (`python3 -c`, `perl -e`, `ruby -e`, …) and narrow the drop to `/dev/null|/dev/stdout|/dev/stderr|/dev/fd/*`.
+
+**What changed on our side (`chore/engram-v020-pin`):** pin `51b4d39 → v0.2.0`; `ConversationMeta` now imported through the declared kernel seam (the TEMP import pending #44 is gone from `factory/worker.ts` and `factory/reviewer.ts`); `test/n1-destructive-classification.test.mjs` rewritten — former suite-B TODOs are now real assertions, plus containment-semantics tests (`compileGates` validation, `applyContainment`, hook matrix sandboxed vs uncontained) and the known-narrowing characterization; worker hygiene rules kept but no longer load-bearing. Verification: unit suite green, `npm run test:boot` green, **G0 PASS 20/20**; fixture-mutating gates (G1/G4) not run.
+
+**Still open:** whether to declare `containment: "sandbox"` for bash in the factory-written `gates.json` (safe here — only sandboxed conversations get bash), and plan item N8 above. The prompt-level stopgap from §5 remains in place as belt-and-braces until that policy call is made.
