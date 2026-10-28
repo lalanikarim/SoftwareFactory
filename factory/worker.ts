@@ -64,7 +64,9 @@ async function prepareWorkspace({ workDir, fixturesRepo, issueNumber, token }: {
   return ws;
 }
 
-function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "node --test" }: { issueNumber: number; issueText: string; lessons?: string; testCommand?: string }): string {
+// Exported for tests: the prompt text is a safety-relevant artifact (it carries the
+// shell-hygiene rules that keep the core's destructive guard from blocking unattended runs).
+export function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "node --test" }: { issueNumber: number; issueText: string; lessons?: string; testCommand?: string }): string {
   const branch = `agent/issue-${issueNumber}`;
   return [
     `You are a software factory worker. The repository is checked out in /sandbox (your working directory), already on branch ${branch}.`,
@@ -90,6 +92,11 @@ function workerPrompt({ issueNumber, issueText, lessons = "", testCommand = "nod
     "- Implement the smallest change that satisfies the issue and its acceptance criteria. Follow the behavior spec in README.md where relevant.",
     "- Add or update tests in test/ covering the new behavior (node:test style, matching the existing suites).",
     `- Run the full suite with \`${testCommand}\` — it must pass before you finish. Do NOT write or run your own long-running scripts, servers, or e2e harnesses: verification is exactly \`${testCommand}\`. Any ad-hoc command must terminate on its own within seconds (wrap any network wait in an AbortController timeout).`,
+    // STOPGAP for the core's built-in destructive guard (see research/n1-bash-destructive-misclassification.md):
+    // that guard screens every bash command with substring regexes and cannot be turned off from
+    // gates.json, so a false-positive match stalls the run. These rules keep our commands in the
+    // shape the guard understands until upstream matches whole simple-commands instead of substrings.
+    "- Shell hygiene: your `bash` tool is screened by a destructive-command guard that blocks on substring matches and stalls your run. Therefore: do not redirect to `/dev/null` (omit the redirect, or write to a file under /tmp); do not use `rm -rf`, `git reset --hard`, or `git push --force`; prefer the read/edit tools over grep/cat pipelines, and never inline SQL DDL (`DROP TABLE`, `TRUNCATE`) or the words `shutdown`/`reboot` inside a shell command string.",
     '- Commit all changes: `git add` only the files you changed, then `git commit -m "<clear message>"`.',
     '- Final answer: one line "COMMITTED <short-sha>: <one-line summary>", then the last lines of the test run output. If you could not complete the work, say exactly what is blocking you instead.',
   ].join("\n");
