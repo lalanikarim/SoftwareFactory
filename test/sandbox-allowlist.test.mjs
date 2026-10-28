@@ -1,13 +1,13 @@
 // Sandbox containment policy (plan §3.6; pattern from engram phase 7): the base
 // image must be on a factory-level allowlist and the workspace must live under
-// the allowed mount root. The policy comes from env, never per-repo config —
-// repo configs may select from the allowlist but not widen it.
+// the allowed mount root. Since cutover the policy is passed explicitly by the
+// composition (factory/main.ts builds it from the per-repo config + instance
+// work root) rather than read from env — the core's own sandbox spec
+// validation applies the same allowlist to conversations.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { validateSandboxSpec, loadSandboxPolicy, SupervisedPodmanSandbox } from "../poc/lib/sandbox-health.mjs";
-import { runSetupInContainer } from "../poc/lib/setup-sandbox.mjs";
-import { DEFAULTS } from "../poc/lib/factory-config.mjs";
+import { validateSandboxSpec, runSetupInContainer } from "../factory/setup-sandbox.ts";
 
 const policy = { allowImages: ["factory-sandbox:latest", "factory-sandbox-node:latest"], mountRoot: "/srv/factory/work" };
 
@@ -40,33 +40,6 @@ test("validateSandboxSpec: prefix trickery does not pass (root must match on a p
     () => validateSandboxSpec({ image: "factory-sandbox:latest", workspace: "/srv/factory/work-evil/issue-1", ...policy }),
     /outside the allowed mount root/,
   );
-});
-
-test("loadSandboxPolicy: defaults are the factory default image and the work dir", () => {
-  delete process.env.SANDBOX_ALLOW_IMAGES;
-  delete process.env.SANDBOX_MOUNT_ROOT;
-  assert.deepEqual(loadSandboxPolicy("/srv/factory/work"), { allowImages: [DEFAULTS.sandboxImage], mountRoot: "/srv/factory/work" });
-});
-
-test("loadSandboxPolicy: env overrides parse (comma list, trimmed, blanks dropped)", () => {
-  process.env.SANDBOX_ALLOW_IMAGES = " img-a:latest , ,img-b:latest ";
-  process.env.SANDBOX_MOUNT_ROOT = "/mnt/sandboxes";
-  try {
-    assert.deepEqual(loadSandboxPolicy("/ignored"), { allowImages: ["img-a:latest", "img-b:latest"], mountRoot: "/mnt/sandboxes" });
-  } finally {
-    delete process.env.SANDBOX_ALLOW_IMAGES;
-    delete process.env.SANDBOX_MOUNT_ROOT;
-  }
-});
-
-test("SupervisedPodmanSandbox: policy violation throws at construction (before any podman call)", () => {
-  assert.throws(
-    () => new SupervisedPodmanSandbox({ workspace: "/srv/factory/work/issue-9", image: "evil-image:latest", network: "none", policy }),
-    /sandbox image not allowlisted/,
-  );
-  // No podman interaction happened: construction with a valid policy succeeds.
-  const ok = new SupervisedPodmanSandbox({ workspace: "/srv/factory/work/issue-9", image: "factory-sandbox:latest", network: "none", policy });
-  assert.equal(ok.image, "factory-sandbox:latest");
 });
 
 test("runSetupInContainer: policy violation rejects before spawning podman", async () => {

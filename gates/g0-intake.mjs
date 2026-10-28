@@ -25,7 +25,7 @@ import { isAgentIssueEvent, intakeRequestId, renderIntakeContent, startIntakeSer
 
 // ---------------------------------------------------------------------------
 // Stub factory target: models the durable server's exactly-once submit()
-// semantics (verified crash-durable in poc/02-durable.mjs PHASE2-DUP).
+// semantics (crash-durability of the core harness is exercised by gate G4).
 // ---------------------------------------------------------------------------
 function makeStubFactory() {
   const byRequestId = new Map();

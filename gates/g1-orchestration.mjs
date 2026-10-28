@@ -35,7 +35,7 @@ const issueNumber = Number(opt("--issue", "3"));
 const requestId = opt("--request-id", `issue-${issueNumber}`);
 const timeoutMin = Number(opt("--timeout-min", "25"));
 
-loadFactoryEnv(); // poc/.env (inference endpoint + fixtures repo)
+loadFactoryEnv(); // root .env (inference endpoint + fixtures repo)
 
 // ---------------------------------------------------------------------------
 // Preflight — fail fast with a clear message, no partial state.

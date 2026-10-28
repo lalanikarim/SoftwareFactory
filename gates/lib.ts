@@ -16,9 +16,9 @@ import { randomBytes } from "node:crypto";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = join(__dirname, "..");
 
-/** Load poc/.env into process.env (existing convention; never overwrites). */
+/** Load the repo-root .env into process.env (never overwrites). */
 export function loadFactoryEnv(): void {
-  const envFile = join(REPO_ROOT, "poc", ".env");
+  const envFile = join(REPO_ROOT, ".env");
   if (!existsSync(envFile)) return;
   for (const line of readFileSync(envFile, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
@@ -186,5 +186,8 @@ export async function rootConversationId(base: string, token: string): Promise<n
   const { json } = await a.get("/conversations");
   const list = json.conversations ?? [];
   if (!list.length) throw new Error("no conversations listed");
-  return list[0].id;
+  // /conversations is newest-first — never assume list[0] is the root.
+  const roots = list.filter((c: any) => c.isRoot === true);
+  if (roots.length) return roots.sort((x: any, y: any) => x.id - y.id)[0].id;
+  return Math.min(...list.map((c: any) => c.id));
 }

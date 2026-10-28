@@ -1,0 +1,265 @@
+// Fleet supervisor (multi-repo plan §3.3), ported to TS for the core
+// composition (issue #30, phase 3).
+//
+// One factory instance per managed repo (factory/main.ts) + one webhook
+// adapter (factory/adapter.ts), started from a single fleet file.
+// Restart-on-fault: the durable harness recovers in-process state from its
+// sqlite db, so a plain respawn is safe — crash-durability is the core's
+// property, exercised by gate G4. On Linux hosts this can be replaced by
+// systemd units with the same one-unit-per-instance shape.
+//
+// Fleet file (JSON):
+// {
+//   "adapter":  { "port": 9700, "routesFile": "data/routes.json", "logPath": "data/intake-adapter.jsonl" },
+//   "factories": [
+//     { "repo": "owner/name", "config": "factory/config/owner-name.json",
+//       "instancesRoot": "factory-instances", "token": "<32-hex>" }
+//   ]
+// }
+//
+// Instances bind ephemeral ports (core port 0); the supervisor learns the
+// actual base from each child's "ready on http://127.0.0.1:<port>" stdout
+// line and rewrites the adapter routes file whenever a factory (re)starts —
+// the routes file is supervisor-owned, never hand-edited.
+//
+// Usage:
+//   node --experimental-strip-types fleet/supervisor.ts run <fleet.json>
+//   node --experimental-strip-types fleet/supervisor.ts status <fleet.json>
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, "..");
+const MAX_RESTARTS = 10;
+const RESTART_BACKOFF_MS = 5_000;
+const READY_RE = /ready on http:\/\/127\.0\.0\.1:(\d+)\/ /;
+
+interface FactoryEntry {
+  repo: string;
+  secret: string; // GitHub webhook secret for this repo (must match the repo's webhook config)
+  config?: string;
+  instancesRoot?: string;
+  token?: string; // stable API_TOKEN for the instance (generated per boot when absent)
+  allowedSenders?: string[]; // optional sender allowlist, carried into the routes file
+}
+interface AdapterEntry {
+  port: number;
+  routesFile: string;
+  logPath?: string;
+}
+interface Fleet {
+  adapter?: AdapterEntry;
+  factories: FactoryEntry[];
+}
+
+function loadFleet(path: string): Fleet {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error(`cannot read/parse fleet file ${path}: ${(e as Error).message}`);
+  }
+  const fleet = raw as Fleet;
+  if (!Array.isArray(fleet.factories) || fleet.factories.length === 0) {
+    throw new Error("fleet.factories must be a non-empty array");
+  }
+  for (const f of fleet.factories) {
+    if (typeof f.repo !== "string" || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(f.repo)) {
+      throw new Error(`factory entry has invalid repo: ${JSON.stringify(f)}`);
+    }
+    // The webhook secret must be explicit in the fleet file (it has to match
+    // the secret configured on GitHub); env override is allowed but never
+    // silently defaulted — an empty secret would crash-loop the adapter.
+    const secret = process.env[`GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")}`] ?? f.secret;
+    if (typeof secret !== "string" || !secret) {
+      throw new Error(`factory ${f.repo} has no webhook secret (fleet entry .secret or GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")})`);
+    }
+  }
+  return fleet;
+}
+
+function spawnProc(name: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+  const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"], env });
+  const pump = (stream: NodeJS.ReadableStream, prefix: string) =>
+    stream.on("data", (d: Buffer) => process.stdout.write(`[${name}] ${prefix}${String(d).replace(/\n$/, "")}\n`));
+  pump(child.stdout, "");
+  pump(child.stderr, "err: ");
+  return child;
+}
+
+/** Resolve a fleet-file-relative path against the fleet file's directory. */
+function rel(fleetPath: string, p: string): string {
+  return resolve(dirname(fleetPath), p);
+}
+
+async function runFleet(fleetPath: string): Promise<void> {
+  const fleet = loadFleet(fleetPath);
+  let shuttingDown = false;
+  const restarts = new Map<string, number>();
+  const children: ChildProcess[] = [];
+  // repo -> base URL once the instance reports ready (for the routes file).
+  const bases = new Map<string, string>();
+
+  // The routes file lists ALL factories from boot (secret known up front) so
+  // the adapter validates cleanly before any instance is ready; `target` is
+  // filled in when an instance reports its ephemeral port and removed on exit.
+  const writeRoutes = () => {
+    if (!fleet.adapter) return;
+    const routesFile = rel(fleetPath, fleet.adapter.routesFile);
+    mkdirSync(dirname(routesFile), { recursive: true });
+    const routes = fleet.factories.map((f) => ({
+      repo: f.repo,
+      secret: process.env[`GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")}`] ?? f.secret!,
+      ...(bases.has(f.repo) ? { target: bases.get(f.repo)! } : {}),
+      ...(f.token ? { token: f.token } : {}),
+      ...(f.allowedSenders ? { allowedSenders: f.allowedSenders } : {}),
+    }));
+    writeFileSync(routesFile, JSON.stringify(routes, null, 2));
+    console.log(`[supervisor] wrote ${routes.length} route(s) to ${routesFile}`);
+  };
+
+  const startFactory = (f: FactoryEntry) => {
+    const key = `factory:${f.repo}`;
+    restarts.set(key, (restarts.get(key) ?? 0) + 1);
+    if ((restarts.get(key) ?? 0) > MAX_RESTARTS) {
+      console.error(`[supervisor] ${key} exceeded ${MAX_RESTARTS} restarts — giving up`);
+      shuttingDown = true;
+      return;
+    }
+    const configPath = f.config ? rel(fleetPath, f.config) : join(REPO_ROOT, "factory", "config", `${f.repo.replace("/", "_")}.json`);
+    const token = f.token ?? randomBytes(16).toString("hex");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      API_TOKEN: token,
+      ...(f.instancesRoot ? { FACTORY_INSTANCES_ROOT: rel(fleetPath, f.instancesRoot) } : {}),
+    };
+    // Remember the token for the routes file even if the entry omitted one.
+    (f as FactoryEntry & { token?: string }).token = token;
+    const args = ["--experimental-strip-types", join(REPO_ROOT, "factory", "main.ts"), f.repo, "--config", configPath];
+    console.log(`[supervisor] starting ${key} — attempt ${restarts.get(key)}`);
+    const child = spawnProc(key, args, env);
+    children.push(child);
+    let readySent = false;
+    // Learn the ephemeral port from stdout and publish it to the routes file.
+    child.stdout!.on("data", (d: Buffer) => {
+      if (readySent) return;
+      const m = String(d).match(READY_RE);
+      if (m) {
+        readySent = true;
+        bases.set(f.repo, `http://127.0.0.1:${m[1]}`);
+        writeRoutes();
+      }
+    });
+    child.on("exit", (code, signal) => {
+      if (shuttingDown) return;
+      bases.delete(f.repo);
+      console.error(`[supervisor] ${key} exited (${signal ?? `code ${code}`}) — restarting in ${RESTART_BACKOFF_MS / 1000}s`);
+      setTimeout(() => startFactory(f), RESTART_BACKOFF_MS);
+    });
+  };
+
+  const startAdapter = () => {
+    if (!fleet.adapter) return; // adapter is optional (single-factory dev mode)
+    const key = "adapter";
+    restarts.set(key, (restarts.get(key) ?? 0) + 1);
+    if ((restarts.get(key) ?? 0) > MAX_RESTARTS) {
+      console.error(`[supervisor] ${key} exceeded ${MAX_RESTARTS} restarts — giving up`);
+      shuttingDown = true;
+      return;
+    }
+    const a = fleet.adapter!;
+    const routesFile = rel(fleetPath, a.routesFile);
+    mkdirSync(dirname(routesFile), { recursive: true });
+    if (!existsSyncSafe(routesFile)) writeRoutes(); // seed an empty-but-valid file
+    const args = ["--experimental-strip-types", join(REPO_ROOT, "factory", "adapter.ts"), String(a.port), routesFile, a.logPath ? rel(fleetPath, a.logPath) : join(dirname(routesFile), "intake-adapter.jsonl")];
+    console.log(`[supervisor] starting ${key} (port ${a.port}) — attempt ${restarts.get(key)}`);
+    const child = spawnProc(key, args, process.env);
+    children.push(child);
+    child.on("exit", (code, signal) => {
+      if (shuttingDown) return;
+      console.error(`[supervisor] ${key} exited (${signal ?? `code ${code}`}) — restarting in ${RESTART_BACKOFF_MS / 1000}s`);
+      setTimeout(startAdapter, RESTART_BACKOFF_MS);
+    });
+  };
+
+  for (const f of fleet.factories) startFactory(f);
+  startAdapter();
+
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("[supervisor] shutting down");
+    for (const c of children) c.kill("SIGTERM");
+    setTimeout(() => process.exit(0), 3_000).unref();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+function existsSyncSafe(p: string): boolean {
+  try {
+    readFileSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function statusFleet(fleetPath: string): Promise<void> {
+  const fleet = loadFleet(fleetPath);
+  // status reads the routes file (written by a live supervisor) to find bases.
+  let routes: Array<{ repo: string; target?: string; token?: string }> = [];
+  if (fleet.adapter) {
+    try {
+      routes = JSON.parse(readFileSync(rel(fleetPath, fleet.adapter.routesFile), "utf8"));
+    } catch {
+      console.error("routes file missing — is the supervisor running?");
+      process.exit(1);
+    }
+  } else {
+    console.error("status requires an adapter entry in the fleet file (it owns the routes file)");
+    process.exit(1);
+  }
+  const rows = await Promise.all(routes.map(async (r) => {
+    const row: Record<string, string> = { repo: r.repo, base: r.target, state: "DOWN", pending: "" };
+    try {
+      const health = await fetch(`${r.target}/health`, { headers: { Authorization: `Bearer ${r.token ?? ""}` }, signal: AbortSignal.timeout(3_000) });
+      if (!health.ok) throw new Error(`health ${health.status}`);
+      row.state = "up";
+      const approvals = await fetch(`${r.target}/approvals`, { headers: { Authorization: `Bearer ${r.token ?? ""}` }, signal: AbortSignal.timeout(5_000) }).then((x) => x.json());
+      const pending = (approvals as { approvals?: Array<{ key?: string; tool?: string }> }).approvals ?? [];
+      if (pending.length > 0) {
+        row.state = "awaiting approval";
+        row.pending = pending.map((p) => `${p.tool ?? "?"}:${p.key ?? "?"}`).join(", ");
+      }
+    } catch (e) {
+      row.state = `DOWN (${(e as Error).message})`;
+    }
+    return row;
+  }));
+  const width = Math.max(...rows.map((r) => r.repo.length), 4);
+  console.log(`${"repo".padEnd(width)}  ${"state".padEnd(18)}  pending`);
+  for (const r of rows) {
+    console.log(`${r.repo.padEnd(width)}  ${r.state.padEnd(18)}  ${r.pending}`);
+  }
+}
+
+const [cmd, fleetPath] = process.argv.slice(2);
+if (cmd === "run" && fleetPath) {
+  runFleet(fleetPath).catch((e) => {
+    console.error("[supervisor] fatal:", e);
+    process.exit(1);
+  });
+} else if (cmd === "status" && fleetPath) {
+  statusFleet(fleetPath).catch((e) => {
+    console.error("[supervisor] fatal:", e);
+    process.exit(1);
+  });
+} else {
+  console.error("usage: fleet/supervisor.ts run <fleet.json> | status <fleet.json>");
+  process.exit(1);
+}

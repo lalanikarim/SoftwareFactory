@@ -3,3 +3,5 @@
 node_modules/
 factory-instances/
 gates/data/
+.env
+fleet/data/

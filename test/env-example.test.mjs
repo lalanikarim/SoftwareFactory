@@ -1,6 +1,6 @@
-// poc/.env.example is a template: it must not bake in any local hostname
+// .env.example is a template: it must not bake in any local hostname
 // (issue #22), so OPENAI_BASE_URL stays a placeholder. The real endpoint
-// lives only in the gitignored poc/.env, which must carry a concrete URL
+// lives only in the gitignored root .env, which must carry a concrete URL
 // when one exists.
 
 import assert from "node:assert/strict";
@@ -9,8 +9,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..");
-const ENV_EXAMPLE = join(ROOT, "poc", ".env.example");
-const ENV_REAL = join(ROOT, "poc", ".env");
+const ENV_EXAMPLE = join(ROOT, ".env.example");
+const ENV_REAL = join(ROOT, ".env");
 
 function parseEnv(text) {
   const out = {};
@@ -45,7 +45,7 @@ test(".env (when present) carries a concrete OPENAI_BASE_URL", async (t) => {
     text = await readFile(ENV_REAL, "utf8");
   } catch (err) {
     if (err.code === "ENOENT") {
-      t.skip("poc/.env not present in this checkout");
+      t.skip(".env not present in this checkout");
       return;
     }
     throw err;
@@ -53,6 +53,6 @@ test(".env (when present) carries a concrete OPENAI_BASE_URL", async (t) => {
   const real = parseEnv(text);
   assert.ok(
     /^https?:\/\/[^\s<]+$/.test(real.OPENAI_BASE_URL ?? ""),
-    `poc/.env OPENAI_BASE_URL should be a concrete URL, got ${real.OPENAI_BASE_URL}`,
+    `.env OPENAI_BASE_URL should be a concrete URL, got ${real.OPENAI_BASE_URL}`,
   );
 });

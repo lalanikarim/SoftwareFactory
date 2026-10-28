@@ -1,7 +1,0 @@
-{
-  "repo": "lalanikarim/drydock",
-  "sandboxImage": "factory-sandbox:latest",
-  "setupCommand": "npm ci --prefix poc",
-  "testCommand": "node poc/01-intake-g0.mjs",
-  "budgets": { "wallSecsPerIssue": 1800, "maxReviewRetries": 2 }
-}
