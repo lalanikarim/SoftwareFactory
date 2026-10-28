@@ -1,6 +1,6 @@
 # N1 — Bash DESTRUCTIVE misclassification (root cause + fix)
 
-**Compiled:** 2026-10-28 · **Core pin:** `lalanikarim/engram@51b4d39076edb1653cb55ec14aa8be032384b8ac` (`51b4d39`) · **Status:** root-caused; factory-side stopgap shipped; upstream fix proposed (not yet filed)
+**Compiled:** 2026-10-28 · **Core pin:** `lalanikarim/engram@51b4d39076edb1653cb55ec14aa8be032384b8ac` (`51b4d39`) · **Status:** root-caused; factory-side stopgap shipped; upstream fix requested → [engram#53](https://github.com/lalanikarim/engram/issues/53)
 
 Companion to `multi-repo-factory-plan.md` §5.7 item N1 — the only known blocker to fully unattended fleets.
 
@@ -98,7 +98,10 @@ Registering the sandbox shell under a different tool name does **not** help — 
 - `factory/worker.ts` — `workerPrompt()` gains a **Shell hygiene** working rule: no `/dev/null` redirection, no `rm -rf` / `git reset --hard` / `git push --force`, prefer read/edit tools over grep/cat pipelines, never inline SQL DDL or the words `shutdown`/`reboot` in a shell string. The rule names the guard so the model understands *why* (and reviewers have no shell tools, so they need nothing).
 - `test/n1-destructive-classification.test.mjs` — four suites: **A** the safety floor must keep catching real destruction (permanent guard), **B** the false positives as node `todo` tests (they are the acceptance test for the upstream fix; they turn TODO-passed when it lands), **C** pin characterization for `51b4d39` so a pin bump that changes behavior fails loudly (feeds plan item N4), **D** the worker prompt keeps carrying every hygiene rule. Wired into `npm test`; suite is green with 4 documented TODOs.
 
-## 6. Upstream issue draft (engram) — ready to file
+## 6. Upstream issue — **filed** as [engram#53](https://github.com/lalanikarim/engram/issues/53)
+
+Filed 2026-10-28; the published issue adds a runnable version of the repro (each line verified verbatim against `51b4d39`) and the docs-drift note to the draft below.
+
 
 > **Title:** Destructive guard blocks benign bash commands and cannot be disabled for sandboxed consumers
 >

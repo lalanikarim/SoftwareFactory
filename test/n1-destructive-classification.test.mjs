@@ -50,7 +50,9 @@ test("A3: ordinary benign commands are not classified", () => {
 
 // --------------------------------------------- B. known false positives (upstream acceptance)
 
-const UPSTREAM = "engram N1: destructive guard is substring-based and not shell-aware";
+// Tracked upstream: https://github.com/lalanikarim/engram/issues/53 (Ask 1: shell-aware matching;
+// Ask 2: declarable floor). Suite B is that issue's acceptance test.
+const UPSTREAM = "engram#53: destructive guard is substring-based and not shell-aware";
 
 test("B1: discarding output to /dev/null is not a destructive write", { todo: UPSTREAM }, () => {
   assert.equal(tierOf("npm ci >/dev/null 2>&1"), null);
