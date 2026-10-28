@@ -129,7 +129,10 @@ async function preflight() {
     problems.push(`gh access failed: ${e.message}`);
   }
   if (MODE === "merge") {
-    for (const issue of new Set([T1_ISSUE, T2_ISSUE])) {
+    // --skip-crash means T2 never runs, so its target must not be validated (it used to fail
+    // preflight with the default issue #2 even when the crash test was skipped).
+    const targets = process.argv.includes("--skip-crash") ? [T1_ISSUE] : [T1_ISSUE, T2_ISSUE];
+    for (const issue of new Set(targets)) {
       try {
         const out = await sh("gh", ["pr", "list", "--repo", REPO, "--state", "open", "--head", `agent/issue-${issue}`, "--json", "number"], { env: GH_ENV });
         if (JSON.parse(out || "[]").length === 0) problems.push(`no open draft PR for agent/issue-${issue} — run G2/G3 first`);
@@ -195,12 +198,18 @@ async function runMergeFlow({ label, issue, crashAfterPending, mode = "merge" })
 
     if (crashAfterPending) {
       // G4 crash test: SIGKILL while the merge approval is pending.
-      instance.child.kill("SIGKILL");
-      await new Promise((resolve) => instance.child.once("exit", resolve));
+      const dead = instance;
+      dead.child.kill("SIGKILL");
+      await new Promise((resolve) => dead.child.once("exit", resolve));
       ev("sigkill-while-pending");
 
+      // Release the killed instance's handles BEFORE re-spawning: its 2 s log-flush interval is
+      // only cleared in close(), and an abandoned handle keeps the whole battery process alive —
+      // G4 printed "GATE G4: PASS" and then hung for over an hour on 2026-10-28 because of this.
+      await dead.close();
+
       // Restart over the SAME durable store with the same token.
-      instance = await spawnInstance({ repo: REPO, configPath: defaultConfigPath(REPO), root: instance.root, token: instance.token });
+      instance = await spawnInstance({ repo: REPO, configPath: defaultConfigPath(REPO), root: dead.root, token: dead.token });
       ev("factory-restarted", { base: instance.base });
 
       const survived = await waitForApproval(instance.base, instance.token, "merge_pr", 5 * 60 * 1000);

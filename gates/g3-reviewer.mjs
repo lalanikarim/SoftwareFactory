@@ -46,6 +46,12 @@ loadFactoryEnv();
 const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
 const image = process.env.FACTORY_SANDBOX_IMAGE ?? "factory-sandbox:latest";
 const skipChain = process.argv.includes("--skip-chain");
+// T3 target must be an UNIMPLEMENTED issue on the fixture repo. It used to be hardcoded to #4,
+// which was merged long ago: the worker found nothing to do, produced no open_draft_pr outcome,
+// and the leg printed `verdict=null draftPR=false gateHeld=false` for ~100s while the gate still
+// reported PASS — because T3 was never part of the verdict. Now: 0 means "skip, say so", and when
+// it runs its outcome is asserted (see the gate computation at the bottom).
+const t3Issue = Number(process.argv.includes("--t3-issue") ? process.argv[process.argv.indexOf("--t3-issue") + 1] : (process.env.G3_T3_ISSUE ?? 0));
 // Deterministic intake requestIds (issue-<n>) make redeliveries exactly-once no-ops.
 // Pass --request-id <id> for a fresh dev re-run of the chain.
 const requestIdOverride = (() => {
@@ -285,15 +291,15 @@ results.t2 = await runReviewer({ label: "t2-known-good", branch: "agent/issue-1"
 console.log(`  verdict=${JSON.stringify(results.t2.verdict)} (${results.t2.wallSecs}s)`);
 results.t2.passed = results.t2.verdict?.verdict === "pass";
 
-// T3 — closed loop on trap issue #4 through the PRODUCTION entrypoint.
-if (!skipChain) {
-  console.log("\nT3: full chain on trap issue #4 (worker -> review -> gate), production entrypoint");
+// T3 — closed loop on a live target issue through the PRODUCTION entrypoint.
+if (t3Issue > 0 && !skipChain) {
+  console.log(`\nT3: full chain on issue #${t3Issue} (worker -> review -> gate), production entrypoint`);
   const t0 = Date.now();
   const instance = await spawnInstance({ repo: fixturesRepo, configPath: defaultConfigPath(fixturesRepo) });
 
   const { startIntakeServer } = await import("../factory/intake.ts");
   const { server: intake, port: intakePort } = await startIntakeServer({
-    logPath: join(runDir, "intake-g3-issue-4.jsonl"),
+    logPath: join(runDir, `intake-g3-issue-${t3Issue}.jsonl`),
     dispatch: async ({ requestId, content }) => {
       const res = await fetch(`${instance.base}/tasks`, {
         method: "POST",
@@ -305,13 +311,13 @@ if (!skipChain) {
     },
   });
 
-  const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", ".title"]);
-  const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/4`, "--jq", '.body // ""'])).trim();
+  const issueTitle = await sh("gh", ["api", `repos/${fixturesRepo}/issues/${t3Issue}`, "--jq", ".title"]);
+  const issueBody = (await sh("gh", ["api", `repos/${fixturesRepo}/issues/${t3Issue}`, "--jq", '.body // ""'])).trim();
   const event = {
     action: "opened",
-    delivery_id: `g3-issue-4-${Date.now()}`,
+    delivery_id: `g3-issue-${t3Issue}-${Date.now()}`,
     repository: { full_name: fixturesRepo },
-    issue: { number: 4, title: issueTitle, body: issueBody, labels: [{ name: "agent" }] },
+    issue: { number: t3Issue, title: issueTitle, body: issueBody, labels: [{ name: "agent" }] },
   };
   const delivery = await fetch(`http://127.0.0.1:${intakePort}/webhook/github`, {
     method: "POST",
@@ -338,7 +344,7 @@ if (!skipChain) {
   const wallSecs = Math.round((Date.now() - t0) / 1000);
   let prExists = false;
   try {
-    const out = await sh("gh", ["pr", "list", "--repo", fixturesRepo, "--state", "open", "--head", "agent/issue-4", "--json", "number,url"]);
+    const out = await sh("gh", ["pr", "list", "--repo", fixturesRepo, "--state", "open", "--head", `agent/issue-${t3Issue}`, "--json", "number,url"]);
     prExists = JSON.parse(out || "[]").length > 0;
   } catch { /* none */ }
 
@@ -350,21 +356,28 @@ if (!skipChain) {
   } catch { /* no parsable result */ }
 
   const gateHeld = verdict ? (verdict.verdict === "fail" ? !prExists : prExists) : false;
-  results.t3 = { wallSecs, openDraftResult: openDraftResult?.slice(0, 400) ?? null, verdict, prExists, gateHeld };
-  console.log(`  verdict=${JSON.stringify(verdict)} draftPR=${prExists} gateHeld=${gateHeld} (${wallSecs}s)`);
+  results.t3 = { issueNumber: t3Issue, wallSecs, openDraftResult: openDraftResult?.slice(0, 400) ?? null, verdict, prExists, gateHeld };
+  if (!verdict) {
+    console.log(`  NO OUTCOME: no open_draft_pr result within the window — issue #${t3Issue} is likely already implemented on main (worker produced nothing to open). Pick an unimplemented target.`);
+  } else {
+    console.log(`  verdict=${JSON.stringify(verdict)} draftPR=${prExists} gateHeld=${gateHeld} (${wallSecs}s)`);
+  }
   await instance.close();
 } else {
-  console.log("\nT3: skipped (--skip-chain)");
+  const why = skipChain ? "--skip-chain" : "no --t3-issue target (pass --t3-issue <unimplemented issue> to run the closed loop)";
+  console.log(`\nT3: skipped (${why})`);
 }
 
 // ---------------------------------------------------------------------------
 const t1Pass = results.t1.caught;
 const t2Pass = results.t2.passed;
-const gate = t1Pass && t2Pass ? "PASS" : "FAIL";
+// A T3 that ran but produced no verdict is a failure, not a pass — silence is not evidence.
+const t3Pass = results.t3 ? results.t3.verdict !== null && results.t3.gateHeld : true;
+const gate = t1Pass && t2Pass && t3Pass ? "PASS" : "FAIL";
 console.log(`\nG3 ${gate}`);
 console.log(`  T1 negative (seeded bad #4): caught=${t1Pass} ${results.t1.verdict ? `(verdict=${results.t1.verdict.verdict})` : "(no verdict)"}`);
 console.log(`  T2 positive (known-good #1): passed=${t2Pass} ${results.t2.verdict ? `(verdict=${results.t2.verdict.verdict})` : "(no verdict)"}`);
-if (results.t3) console.log(`  T3 closed loop (#4): gateHeld=${results.t3.gateHeld}, draftPR=${results.t3.prExists}`);
+console.log(`  T3 closed loop (${results.t3 ? `#${results.t3.issueNumber}` : "skipped"}): ${results.t3 ? `verdictOk=${results.t3.verdict !== null}, gateHeld=${results.t3.gateHeld}, draftPR=${results.t3.prExists}` : "not run"}`);
 
 writeFileSync(join(runDir, "g3-results.json"), JSON.stringify({ date: new Date().toISOString(), results }, null, 2));
 console.log(`results: ${join(runDir, "g3-results.json")}`);

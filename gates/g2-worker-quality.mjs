@@ -39,6 +39,11 @@ const opt = (flag, dflt) => {
 const issues = opt("--issues", "16,17,18").split(",").map(Number);
 const timeoutMin = Number(opt("--timeout-min", "25"));
 const allowExisting = argv.includes("--allow-existing");
+// Scope bound: 5 held for single-behavior issues, but an issue that adds a ROUTE legitimately
+// spans server.mjs + invoices.mjs + store.mjs + two test files (issue #34 did exactly that and
+// failed scope while its behavior was correct). The bound stays at 5 by default — weakening it
+// silently would defeat the check — but is now overridable so a run's calibration is explicit.
+const maxScopeFiles = Number(opt("--max-files", "5"));
 
 loadFactoryEnv();
 const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
@@ -139,11 +144,11 @@ async function runSuite(dir) {
   }
 }
 
-async function checkScope(dir) {
+async function checkScope(dir, maxFiles = maxScopeFiles) {
   const files = (await sh("git", ["-C", dir, "diff", "--name-only", "origin/main...HEAD"])).split("\n").filter(Boolean);
   // Scope: implementation + tests + README docs only; nothing else, and bounded size.
   const inScope = files.every((f) => f.startsWith("src/") || f.startsWith("test/") || f === "README.md");
-  return { files, ok: inScope && files.length <= 5 };
+  return { files, maxFiles, inScope, ok: inScope && files.length <= maxFiles };
 }
 
 /** Start the branch's server on an ephemeral port; run fn; always stop it. */
@@ -231,6 +236,118 @@ async function checkBehavior(issueNumber, dir) {
         detail: `open->open ${sameOpen.status} (want 200), paid->paid ${samePaid.status} (want 200), paid->voided ${invalid.status} (want 409)`,
       };
     }
+    if (issueNumber === 28) {
+      // Issue: /summary gains openCount/paidCount/voidedCount, existing fields unchanged.
+      const empty = await api(base, "GET", "/summary");
+      await api(base, "POST", "/invoices", { customerId: "c28-open", amountCents: 100 });
+      const paid = await api(base, "POST", "/invoices", { customerId: "c28-paid", amountCents: 200 });
+      const voided = await api(base, "POST", "/invoices", { customerId: "c28-void", amountCents: 300 });
+      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
+      await api(base, "PUT", `/invoices/${voided.body.id}/status`, { status: "voided" });
+      const s = await api(base, "GET", "/summary");
+      const zeroOk = empty.status === 200 && ["openCount", "paidCount", "voidedCount"].every((k) => empty.body[k] === 0);
+      const countsOk = s.status === 200 && s.body.openCount === 1 && s.body.paidCount === 1 && s.body.voidedCount === 1;
+      const keptOk = ["invoiceCount", "totalCents", "openCents", "paidCents"].every((k) => typeof s.body[k] === "number");
+      return {
+        ok: zeroOk && countsOk && keptOk,
+        detail: `empty counts ${JSON.stringify([empty.body.openCount, empty.body.paidCount, empty.body.voidedCount])} (want 0,0,0), after 1/1/1 got ${JSON.stringify([s.body.openCount, s.body.paidCount, s.body.voidedCount])}, totals kept=${keptOk}`,
+      };
+    }
+    if (issueNumber === 29) {
+      // Issue: DELETE voids an open invoice; 409 on paid/voided; 404 unknown.
+      const open = await api(base, "POST", "/invoices", { customerId: "c29", amountCents: 100 });
+      const del = await api(base, "DELETE", `/invoices/${open.body.id}`);
+      const afterDel = await api(base, "GET", `/invoices/${open.body.id}`);
+      const paid = await api(base, "POST", "/invoices", { customerId: "c29b", amountCents: 200 });
+      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
+      const delPaid = await api(base, "DELETE", `/invoices/${paid.body.id}`);
+      const stillPaid = await api(base, "GET", `/invoices/${paid.body.id}`);
+      const missing = await api(base, "DELETE", "/invoices/999999");
+      const voidOk = del.status === 200 && del.body.status === "voided" && afterDel.body.status === "voided";
+      const conflictOk = delPaid.status === 409 && stillPaid.body.status === "paid";
+      const notFoundOk = missing.status === 404;
+      return {
+        ok: voidOk && conflictOk && notFoundOk,
+        detail: `DELETE open ${del.status}/${del.body.status} (want 200/voided), DELETE paid ${delPaid.status} then status=${stillPaid.body.status} (want 409/paid), unknown ${missing.status} (want 404)`,
+      };
+    }
+    if (issueNumber === 33) {
+      // Issue: ?offset=N windows the filtered list; bad offset → 400; past end → empty 200.
+      const ids = [];
+      for (let i = 0; i < 5; i++) {
+        const created = await api(base, "POST", "/invoices", { customerId: `c33-${i}`, amountCents: 100 + i });
+        ids.push(created.body.id);
+      }
+      const win = await api(base, "GET", "/invoices?offset=2&limit=2");
+      const zero = await api(base, "GET", "/invoices?offset=0&limit=2");
+      const absent = await api(base, "GET", "/invoices?limit=2");
+      const pastEnd = await api(base, "GET", "/invoices?offset=99");
+      const badOffset = await api(base, "GET", "/invoices?offset=-1");
+      const badText = await api(base, "GET", "/invoices?offset=abc");
+      const winOk = win.status === 200 && JSON.stringify(win.body.invoices.map((i) => i.id)) === JSON.stringify(ids.slice(2, 4));
+      const sameOk = zero.status === 200 && absent.status === 200 && JSON.stringify(zero.body.invoices.map((i) => i.id)) === JSON.stringify(absent.body.invoices.map((i) => i.id));
+      const emptyOk = pastEnd.status === 200 && Array.isArray(pastEnd.body.invoices) && pastEnd.body.invoices.length === 0;
+      const rejectOk = badOffset.status === 400 && badText.status === 400;
+      return {
+        ok: winOk && sameOk && emptyOk && rejectOk,
+        detail: `offset=2&limit=2 -> ${JSON.stringify(win.body.invoices?.map((i) => i.id))} (want ${JSON.stringify(ids.slice(2, 4))}), offset=0==absent=${sameOk}, past end ${pastEnd.status}/len${pastEnd.body.invoices?.length}, offset=-1 ${badOffset.status} & abc ${badText.status} (want 400)`,
+      };
+    }
+    if (issueNumber === 34) {
+      // Issue: PATCH /invoices/:id edits amountCents only while open; other fields rejected.
+      const open = await api(base, "POST", "/invoices", { customerId: "c34", amountCents: 100 });
+      const patched = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: 250 });
+      const paid = await api(base, "POST", "/invoices", { customerId: "c34b", amountCents: 300 });
+      await api(base, "PUT", `/invoices/${paid.body.id}/status`, { status: "paid" });
+      const patchPaid = await api(base, "PATCH", `/invoices/${paid.body.id}`, { amountCents: 1 });
+      const paidAfter = await api(base, "GET", `/invoices/${paid.body.id}`);
+      const badAmount = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: -5 });
+      const afterBad = await api(base, "GET", `/invoices/${open.body.id}`);
+      const smuggled = await api(base, "PATCH", `/invoices/${open.body.id}`, { amountCents: 500, status: "paid" });
+      const smuggledAfter = await api(base, "GET", `/invoices/${open.body.id}`);
+      const missing = await api(base, "PATCH", "/invoices/999999", { amountCents: 10 });
+      const editOk = patched.status === 200 && patched.body.amountCents === 250;
+      const immutableOk = patchPaid.status === 409 && paidAfter.body.amountCents === 300;
+      const validateOk = badAmount.status === 400 && afterBad.body.amountCents === 250;
+      const noSmuggleOk = smuggled.status === 400 && smuggledAfter.body.status === "open" && smuggledAfter.body.amountCents === 250;
+      const notFoundOk = missing.status === 404;
+      return {
+        ok: editOk && immutableOk && validateOk && noSmuggleOk && notFoundOk,
+        detail: `PATCH open ${patched.status} amount=${patched.body.amountCents} (want 200/250), PATCH paid ${patchPaid.status} amount=${paidAfter.body.amountCents} (want 409/300), bad amount ${badAmount.status} kept=${afterBad.body.amountCents} (want 400/250), smuggled status ${smuggled.status} status=${smuggledAfter.body.status} (want 400/open), unknown ${missing.status} (want 404)`,
+      };
+    }
+    if (issueNumber === 35) {
+      // Issue: invoices carry history [{from,to}], rejected transitions append nothing.
+      const inv = await api(base, "POST", "/invoices", { customerId: "c35", amountCents: 100 });
+      const created = await api(base, "GET", `/invoices/${inv.body.id}`);
+      const createdOk = Array.isArray(created.body.history) && created.body.history.length === 1 &&
+        created.body.history[0].from === null && created.body.history[0].to === "open";
+      const toPaid = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "paid" });
+      const appendedOk = Array.isArray(toPaid.body.history) && JSON.stringify(toPaid.body.history.at(-1)) === JSON.stringify({ from: "open", to: "paid" });
+      const beforeRejected = JSON.stringify((await api(base, "GET", `/invoices/${inv.body.id}`)).body.history);
+      const rejected = await api(base, "PUT", `/invoices/${inv.body.id}/status`, { status: "voided" });
+      const afterRejected = JSON.stringify((await api(base, "GET", `/invoices/${inv.body.id}`)).body.history);
+      const cleanOk = rejected.status >= 400 && beforeRejected === afterRejected;
+      return {
+        ok: createdOk && appendedOk && cleanOk,
+        detail: `created history ${JSON.stringify(created.body.history)} (want [{from:null,to:"open"}]), after paid last=${JSON.stringify(toPaid.body.history?.at(-1))} (want {from:"open",to:"paid"}), rejected ${rejected.status} unchanged=${cleanOk}`,
+      };
+    }
+    if (issueNumber === 36) {
+      // Issue: bodies over 64 KiB → 413 while streaming; small/empty bodies unaffected.
+      const big = await api(base, "POST", "/invoices", { customerId: "c36", amountCents: 100, note: "x".repeat(70_000) });
+      const small = await api(base, "POST", "/invoices", { customerId: "c36-small", amountCents: 100 });
+      const emptyBody = await api(base, "POST", "/invoices", undefined);
+      const stillUsable = await api(base, "GET", "/health");
+      const tooBigOk = big.status === 413;
+      const smallOk = small.status === 201;
+      const emptyOk = emptyBody.status !== 413 && emptyBody.status < 500;
+      const usableOk = stillUsable.status === 200;
+      return {
+        ok: tooBigOk && smallOk && emptyOk && usableOk,
+        detail: `70 KB body ${big.status} (want 413), small POST ${small.status} (want 201), empty body ${emptyBody.status} (want not-413/<500), connection usable after=${usableOk}`,
+      };
+    }
     throw new Error(`no behavior check defined for issue #${issueNumber}`);
   });
 }
@@ -263,11 +380,14 @@ for (const n of issues) {
     const run = await runIssue(n);
     const evaln = await evaluateIssue(n);
     results.push({ ...run, ...evaln });
-    console.log(
-      `  issue #${n}: suite=${evaln.suite.passed ? `pass ${evaln.suite.pass}/${evaln.suite.fail}` : "FAIL"} ` +
-        `scope=${evaln.scope.ok ? `ok (${evaln.scope.files.length} files)` : `FAIL (${evaln.scope.files.join(", ")})`} ` +
-        `behavior=${evaln.behavior.ok ? "ok" : `FAIL: ${evaln.behavior.detail}`} zeroEdits=${evaln.zeroEdits} => ${evaln.passed ? "PASS" : "FAIL"}`,
-    );
+    const suiteStr = evaln.suite.passed ? `pass ${evaln.suite.pass}/${evaln.suite.fail}` : "FAIL";
+    const scopeStr = evaln.scope.ok
+      ? `ok (${evaln.scope.files.length}/${evaln.scope.maxFiles} files)`
+      : evaln.scope.inScope
+        ? `FAIL too many files (${evaln.scope.files.length} > ${evaln.scope.maxFiles})`
+        : `FAIL out of scope (${evaln.scope.files.join(", ")})`;
+    const behaviorStr = evaln.behavior.ok ? "ok" : `FAIL: ${evaln.behavior.detail}`;
+    console.log(`  issue #${n}: suite=${suiteStr} scope=${scopeStr} behavior=${behaviorStr} zeroEdits=${evaln.zeroEdits} => ${evaln.passed ? "PASS" : "FAIL"}`);
   } catch (e) {
     results.push({ issueNumber: n, passed: false, error: e.message });
     console.log(`  issue #${n}: RUN FAIL — ${e.message}`);
