@@ -112,7 +112,7 @@ async function main() {
 
   const image = factoryCfg.sandboxImage ?? process.env.FACTORY_SANDBOX_IMAGE ?? "factory-sandbox:latest";
   // Per-instance declarative files (gates.json) are read from configDir —
-  // honored since engram #48 (pin 51b4d39).
+  // honored since engram #48 (current pin: kernel v0.2.0).
   const config = loadConfig({
     dataDir,
     configDir,
