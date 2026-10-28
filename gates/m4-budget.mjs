@@ -35,7 +35,12 @@ if (!repoB || !issueB) {
   console.error("M4 requires M_REPO_B and M_ISSUE_B (the repo that must complete) — set them and re-run.");
   process.exit(2);
 }
-const budgetSecs = Number(process.env.M4_BUDGET_SECS ?? 120);
+// The budget must be BELOW a typical successful run or the gate proves nothing: with the old
+// default of 120 s a bounded fixture issue now finishes in ~60–120 s, so no abort ever fires and
+// the script waits out its full 20-minute delegate-wait before failing with no diagnostic.
+// 30 s reliably interrupts a real worker mid-task on our endpoint (verified 2026-10-28: A aborted
+// by budget with zero side effects while B completed and merged exactly once in 202 s).
+const budgetSecs = Number(process.env.M4_BUDGET_SECS ?? 30);
 const GH_ENV = { ...process.env, GH_TOKEN: process.env.FACTORY_GITHUB_TOKEN ?? "" };
 const WAIT_APPROVAL_MS = 25 * 60 * 1000;
 const WAIT_MERGED_MS = 25 * 60 * 1000;
