@@ -8,8 +8,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "../vendor/engram/app/src/config.ts";
-import { createCoreInstance } from "../vendor/engram/app/src/core.ts";
+// Kernel's declared public surface (app/src/core.ts), not internal modules.
+import { createCoreInstance, loadConfig } from "../vendor/engram/app/src/core.ts";
+import { instanceGatesConfig } from "./gate-policy.ts";
 
 async function firstModelRef(base: string): Promise<{ provider: string; modelId: string }> {
   const r = await fetch(`${base.replace(/\/$/, "")}/models`, {
@@ -69,11 +70,10 @@ const configDir = join(tmp, "config");
 const workRoot = join(tmp, "work");
 for (const d of [dataDir, configDir, workRoot]) mkdirSync(d, { recursive: true });
 
-// Factory-owned gate policy (same content factory/main.ts writes per instance).
-writeFileSync(join(configDir, "gates.json"), JSON.stringify({
-  tiers: [{ tool: "merge_pr" }],
-  destructivePatterns: ['^\\{"issueNumber":\\d+\\}$'],
-}, null, 2));
+// Factory-owned gate policy — the SAME object production writes (factory/gate-policy.ts). This
+// used to be a hand-copied duplicate that had drifted: it carried a destructivePattern matching
+// {"issueNumber":N}, which also matches delegate()'s arg shape. Shared module + pin test instead.
+writeFileSync(join(configDir, "gates.json"), JSON.stringify(instanceGatesConfig(), null, 2));
 
 const config = loadConfig({
   dataDir,
