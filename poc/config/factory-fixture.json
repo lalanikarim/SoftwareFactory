@@ -1,6 +1,0 @@
-{
-  "repo": "lalanikarim/factory-fixture",
-  "sandboxImage": "factory-sandbox:latest",
-  "testCommand": "node --test",
-  "budgets": { "wallSecsPerIssue": 1800, "maxReviewRetries": 2 }
-}

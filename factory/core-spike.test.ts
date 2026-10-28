@@ -27,12 +27,12 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// ---- env: drydock's poc/.env (the vendored loadDotEnv points inside the
+// ---- env: drydock's root .env (the vendored loadDotEnv points inside the
 // submodule where no .env exists — parse our own, never overwrite ambient) ----
 function readFactoryEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   try {
-    for (const line of readFileSync(path.join(ROOT, "poc", ".env"), "utf8").split("\n")) {
+    for (const line of readFileSync(path.join(ROOT, ".env"), "utf8").split("\n")) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (m) out[m[1]] = m[2];
     }

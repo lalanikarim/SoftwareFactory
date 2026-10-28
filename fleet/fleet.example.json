@@ -1,0 +1,21 @@
+{
+  "adapter": {
+    "port": 9700,
+    "routesFile": "data/routes.json",
+    "logPath": "data/intake-adapter.jsonl"
+  },
+  "factories": [
+    {
+      "repo": "lalanikarim/factory-fixture",
+      "secret": "REPLACE-WITH-THE-REPO-S-GITHUB-WEBHOOK-SECRET",
+      "config": "../factory/config/lalanikarim_factory-fixture.json",
+      "instancesRoot": "../factory-instances"
+    },
+    {
+      "repo": "lalanikarim/factory-fixture-2",
+      "secret": "REPLACE-WITH-THE-REPO-S-GITHUB-WEBHOOK-SECRET",
+      "config": "../factory/config/lalanikarim_factory-fixture-2.json",
+      "instancesRoot": "../factory-instances"
+    }
+  ]
+}

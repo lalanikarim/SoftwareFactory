@@ -141,7 +141,7 @@ async function preflight() {
   // Podman + sandbox image (the review gate runs tests in the sandbox).
   try {
     const images = await sh("podman", ["images", "--format", "{{.Repository}}"]);
-    if (!images.split("\n").some((l) => l.includes("factory-sandbox"))) problems.push("factory-sandbox image missing — podman build -t factory-sandbox:latest poc/sandbox-image/");
+    if (!images.split("\n").some((l) => l.includes("factory-sandbox"))) problems.push("factory-sandbox image missing — podman build -t factory-sandbox:latest factory/sandbox-image/");
   } catch (e) {
     problems.push(`podman unavailable: ${e.message}`);
   }

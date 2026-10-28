@@ -1,7 +1,7 @@
 // Phase 1 boot test: the full factory pipeline composed on createCoreInstance.
 // Hermetic — temp dirs under os.tmpdir(), ephemeral port, no podman (no
 // sandboxed conversations are started), no GitHub calls. Skips cleanly when
-// the inference endpoint from poc/.env is unreachable (same as core-spike).
+// the inference endpoint from .env is unreachable (same as core-spike).
 
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -27,7 +27,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 
 function loadFactoryEnv() {
-  const envFile = join(root, "poc", ".env");
+  const envFile = join(root, ".env");
   if (!existsSync(envFile)) return;
   for (const line of readFileSync(envFile, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
@@ -55,7 +55,7 @@ process.env.API_TOKEN ??= "drydock-factory-boot-token";
 const baseUrl = process.env.OPENAI_BASE_URL ?? "";
 const apiKey = process.env.API_TOKEN ?? "";
 if (!baseUrl || !apiKey) {
-  console.log("core boot (factory pipeline): SKIP — no inference endpoint in poc/.env");
+  console.log("core boot (factory pipeline): SKIP — no inference endpoint in .env");
   process.exit(0);
 }
 if (!(await reachable(baseUrl))) {

@@ -43,7 +43,7 @@ function parseArgs(argv: string[]) {
 }
 
 function loadFactoryEnv(): void {
-  const envFile = join(__dirname, "..", "poc", ".env");
+  const envFile = join(__dirname, "..", ".env");
   if (!existsSync(envFile)) return;
   for (const line of readFileSync(envFile, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
