@@ -19,7 +19,8 @@ import { instanceGatesConfig } from "./gate-policy.ts";
 // Both symbols come from the kernel's declared public surface (app/src/core.ts), not internal modules.
 import { createCoreInstance, loadConfig } from "../vendor/engram/app/src/core.ts";
 import { loadFactoryConfig } from "./factory-config.ts";
-import { factoryPipeline, ORCHESTRATOR_INSTRUCTIONS } from "./pipeline.ts";
+import { factoryPipeline, orchestratorInstructions } from "./pipeline.ts";
+import { loadRegistry, requireEnabledRepo } from "./repo-registry.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +88,13 @@ async function main() {
     console.log(`[factory] generated API_TOKEN for this boot: ${process.env.API_TOKEN}`);
   }
 
+  // Repo POLICY (factory/repo-registry.json) is resolved FIRST — before the per-repo runtime config
+  // is even read — for two reasons: an unregistered or disabled repo gets a policy explanation rather
+  // than a confusing "config file missing" ENOENT, and everything below can trust `policy` instead of
+  // re-checking it. Consequences: only registered+enabled repos start at all, and autoMerge:false
+  // removes merge_pr from the tool list entirely so honoring it is not something a caller can forget.
+  const policy = requireEnabledRepo(loadRegistry(), repo);
+
   const factoryCfg = loadFactoryConfig(configPath ?? join(__dirname, "config", `${repo.replace("/", "_")}.json`));
   if (factoryCfg.repo !== repo) {
     console.error(`[factory] config at ${configPath} declares repo ${factoryCfg.repo}, but was started for ${repo}`);
@@ -131,6 +139,7 @@ async function main() {
   const pipelineOpts = {
     workDir: workRoot,
     fixturesRepo: factoryCfg.repo,
+    autoMerge: policy.autoMerge,
     ghToken: process.env.FACTORY_GITHUB_TOKEN ?? factoryCfg.gitToken,
     modelRef: await resolveModelRef(factoryCfg.models),
     image,
@@ -141,14 +150,20 @@ async function main() {
     sandboxPolicy: { allowImages: [image], mountRoot: workRoot },
   };
   const ext = factoryPipeline(pipelineOpts);
-  const rootTools = (ext.tools ?? []).filter((t) => ["delegate", "open_draft_pr", "merge_pr", "note_lesson"].includes(t.name));
+  const rootToolNames = policy.autoMerge
+    ? ["delegate", "open_draft_pr", "merge_pr", "note_lesson"]
+    : ["delegate", "open_draft_pr", "note_lesson"];
+  const rootTools = (ext.tools ?? []).filter((t) => rootToolNames.includes(t.name));
+  if (!policy.autoMerge) {
+    console.log(`[factory] ${repo}: registry policy autoMerge=false — merge_pr is not offered; runs stop at the draft PR for a human to merge`);
+  }
 
   createCoreInstance({
     config,
     modelsConfig,
     extraExtensions: [ext],
     port: 0, // ephemeral; the supervisor records actualPort per instance
-    rootAgent: { instructions: ORCHESTRATOR_INSTRUCTIONS, tools: rootTools },
+    rootAgent: { instructions: orchestratorInstructions({ autoMerge: policy.autoMerge }), tools: rootTools },
   }).then((instance) => {
     console.log(`[factory] ${repo} ready on http://127.0.0.1:${instance.actualPort}/ (data: ${dataDir})`);
 
