@@ -218,6 +218,21 @@ async function runMergeFlow({ label, issue, crashAfterPending, mode = "merge" })
       ev("approval-state-survived-restart", { key: survived.key });
     }
 
+    // Fail CLOSED before approving: the commit whose evidence we verified must still be the PR head.
+    // Our own open_draft_pr force-pushes onto current main, so a draft left open while main moves
+    // gets rewritten between verification and merge — observed 2026-10-28 on stale drafts for
+    // issues #35/#18: exactly-once merge held, but the commit that landed was NOT the one whose
+    // evidence had been checked (the old head is now unreferenced). Approving a rewrite we never
+    // verified would make the approval meaningless, so refuse and require re-verification.
+    const preApprove = await prForHead(branch);
+    if (!preApprove || preApprove.headRefOid !== result.expectedHeadSha) {
+      throw new Error(
+        `PR head changed after evidence verification (${result.expectedHeadSha} -> ${preApprove?.headRefOid ?? "no open PR"}): `
+        + `the branch was rewritten (open_draft_pr rebases onto main). Not approving — re-run G2 against the new head first.`,
+      );
+    }
+    ev("head-still-verified", { headRefOid: result.expectedHeadSha });
+
     const decided = await decideApproval(instance.base, instance.token, pending.key, "approved", "g4-battery");
     if (decided.status !== 200) throw new Error(`approve failed: ${decided.status} ${JSON.stringify(decided.json)}`);
     ev("approved");
