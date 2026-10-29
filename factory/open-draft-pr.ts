@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type Context, type ToolExecutionApi, type ToolTask } from "@earendil-works/pi-durable";
 import { commandArgv } from "./factory-config.ts";
+import { checkPathScope, formatScopeFailure, UNRESTRICTED_SCOPE, type PathScope } from "./path-scope.ts";
 
 const pExecFile = promisify(execFile);
 
@@ -160,9 +161,15 @@ export interface OpenDraftPrOptions {
   modelRef: { provider: string; modelId: string };
   reviewerTaskDef: ToolTask;
   testCommand?: string;
+  /**
+   * Which paths this repo's policy lets a run change (factory/path-scope.ts + the repo registry).
+   * Defaults to unrestricted-except-protected, because `vendor/` is protected unconditionally — the
+   * vendored kernel pin is a human decision and must not be changeable by omission.
+   */
+  pathScope?: PathScope;
 }
 
-export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef, reviewerTaskDef, testCommand = "node --test" }: OpenDraftPrOptions) {
+export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef, reviewerTaskDef, testCommand = "node --test", pathScope = UNRESTRICTED_SCOPE }: OpenDraftPrOptions) {
   return defineTool({
     name: "open_draft_pr",
     description:
@@ -197,6 +204,36 @@ export function openDraftPrTool({ workDir, fixturesRepo, ghToken = "", modelRef,
         }
       }
       const log = await sh("git", ["-C", ws, "log", "--oneline", "-3", branch]);
+
+      // Path scope gate — structural, and BEFORE the review, so a run that touched something it
+      // should not have costs seconds instead of minutes of reviewer inference. The classic case is
+      // a branch whose only change is the vendor/engram submodule pointer: every test passes, and
+      // the vendored kernel quietly changes under us.
+      let changedFiles: string[];
+      try {
+        const base = await sh("git", ["-C", ws, "merge-base", "origin/main", branch]);
+        changedFiles = (await sh("git", ["-C", ws, "diff", "--name-only", `${base}..${branch}`])).split("\n").filter(Boolean);
+      } catch (e) {
+        // Fail closed: no diff basis means no scope verdict, and pushing unchecked is the unsafe option.
+        return {
+          output: [{ type: "text" as const, text: JSON.stringify({ refused: true, reason: `cannot compute changed files against origin/main (${(e as Error).message.split("\n")[0]}); refusing to push unchecked` }) }],
+        };
+      }
+      const scope = checkPathScope(changedFiles, pathScope);
+      if (!scope.ok) {
+        return {
+          output: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              refused: true,
+              reason: "path scope violation — nothing was pushed or reviewed",
+              offenders: scope.offenders,
+              detail: formatScopeFailure(scope),
+              hint: "Re-delegate with the offending paths named as out of scope, or have a human change this repo's pathAllowlist in factory/repo-registry.json.",
+            }),
+          }],
+        };
+      }
 
       // Structural gate (not prompt-dependent): run an independent read-only
       // review of the committed branch NOW; only push if it passes. The

@@ -19,6 +19,7 @@ import { factoryReviewerTask, makeReviewerRoleTools } from "./reviewer.ts";
 import { openDraftPrTool } from "./open-draft-pr.ts";
 import { mergePrTool } from "./merge-gate.ts";
 import { noteLessonTool } from "./lessons.ts";
+import type { PathScope } from "./path-scope.ts";
 
 /**
  * The orchestrator prompt.
@@ -61,6 +62,8 @@ export interface PipelineOptions {
   wallSecsPerIssue?: number;
   lessonsFile?: string; // note_lesson target + worker lesson source
   sandboxPolicy?: { allowImages: string[]; mountRoot: string } | null;
+  /** Which paths open_draft_pr may push (from the repo registry; see factory/path-scope.ts). */
+  pathScope?: PathScope;
   /**
    * Registry policy (factory/repo-registry.json `autoMerge`). When false, merge_pr is not registered
    * at all and the orchestrator prompt stops at the draft PR — capability removal rather than a
@@ -103,6 +106,7 @@ export function factoryPipeline(opts: PipelineOptions) {
         modelRef: opts.modelRef,
         reviewerTaskDef,
         testCommand: opts.testCommand,
+        pathScope: opts.pathScope,
       }),
       // Capability removal, not a runtime check: with autoMerge=false the orchestrator never sees a
       // merge tool, so a policy violation would require inventing one rather than misclicking.

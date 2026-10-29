@@ -343,3 +343,30 @@ The registry entry stays `enabled: false`. What remains before N3 flips it is de
 - **Recursion.** A repo's own `testCommand` must never include gates that mutate GitHub (G1 opens PRs, G4 merges). `npm test` is safe today precisely because it is unit-only — that is a property to preserve, not an accident to rediscover.
 - **A green suite is a weak judge here.** For fixtures we have behavior oracles; for drydock the worker would be graded by the same suite it can edit. G2/G3 should stay in the loop for self-work rather than trusting `npm test` alone.
 - **Nothing stops a worker touching `vendor/engram`.** The 5-file / `src|test` scope rule lives in the G2 harness, not the pipeline, and submodule pointer changes are exactly the kind of edit that passes tests while being unacceptable. Candidate fix: a per-repo path allowlist in the registry, enforced by `open_draft_pr` before push.
+
+### 5.13 Path scope: the pipeline cannot change what it is not allowed to touch (2026-10-28)
+
+§5.12 named the risk that stayed unfixed: nothing stopped `open_draft_pr` pushing a branch whose only change was the **`vendor/engram` submodule pointer** — every test passes, and the vendored kernel changes underneath us. Pin discipline is a human decision (tags, review, rollback), so it should be structurally impossible rather than prompted for.
+
+Two mechanisms in `factory/path-scope.ts`, different default posture on purpose:
+
+| Mechanism | Default | Semantics |
+|---|---|---|
+| `ALWAYS_PROTECTED_PATHS = ["vendor/"]` | **on everywhere**, before any config is consulted | never changeable; forgetting to configure a repo cannot expose the pin, and an allowlist naming `vendor/` does not override it |
+| registry `pathAllowlist` | per repo; absent = anything non-protected | fixtures: `src/`, `test/`, `README.md`. drydock: `factory/ fleet/ gates/ test/ research/` — which deliberately excludes `package.json`/`package-lock.json` (dependency and lockfile changes are human-only for self-runs) and `AGENTS.md`/.github |
+
+Prefix matching only (trailing `/` = directory, otherwise exact). No globs: every dialect considered needed its own security review, and top-level prefixes express what we actually want. Registry validation rejects an **empty** allowlist (`[]` would silently forbid all changes), absolute paths, `..`, backslashes and shell metacharacters — same posture as `factory-config.ts`.
+
+The gate runs in `open_draft_pr` **before the reviewer**, so a run that touched something off-limits costs seconds instead of minutes of inference, and it **fails closed** when the diff basis against `origin/main` cannot be computed: pushing unchecked is the unsafe option.
+
+**Verified at three levels.** (1) Unit semantics + registry wiring — `test/path-scope.test.mjs`, 7 checks. (2) The git assumption this rests on is itself pinned by a test that builds a throwaway repo with a real submodule, bumps the pointer, and asserts `git diff --name-only base..branch` reports exactly `["vendor/engram"]` — if git ever surfaces gitlinks differently, the test fails here rather than silently un-enforcing the rule. (3) **Live end-to-end**: a workspace whose only change was `notes.txt` (outside fixture-1's allowlist), a real instance, and a task instructing the orchestrator to open the PR:
+
+```
+open_draft_pr result: {"refused":true,"reason":"path scope violation — nothing was pushed or reviewed",
+  "offenders":[{"file":"notes.txt","why":"outside this repo's allowlist (src/, test/, README.md)"}], …}
+branch pushed to origin? NO — nothing was pushed
+```
+
+**Considered and declined:** making the G2 harness read its scope rule from the registry. The harness rule is intentionally stricter (it also bounds file *count*, and it runs on a checkout rather than pre-push), and silently unifying them would couple a review heuristic to a safety control — if one day they must agree, that should be an explicit decision, not a refactor side effect.
+
+**Still true after this:** scope is about paths, not content. A worker can still write terrible code inside `src/`; that is what the reviewer and G2/G3 are for. And `autoMerge` remains separately enforced (§5.11) — path scope says what may change, auto-merge says whether it may land.
