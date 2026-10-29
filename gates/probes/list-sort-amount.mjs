@@ -9,6 +9,10 @@
  * sorting happens BEFORE limit/offset; without `sort` the id-ascending order is unchanged.
  */
 export const key = "list-sort-amount";
+
+// Which fleet repo this oracle boots against (factory/repo-registry.json). Selection is by label; this is a
+// guard so an invoice oracle can never be run against the jobs service and silently "pass".
+export const repo = "lalanikarim/factory-fixture";
 // Provenance only — never used to select this oracle (labels do that). Lets --regression tell
 // "this feature's issue is still open" apart from "this shipped feature regressed".
 export const sourceIssue = 45;

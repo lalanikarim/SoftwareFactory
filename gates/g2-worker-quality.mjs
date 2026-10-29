@@ -2,6 +2,11 @@
 //
 //   node gates/g2-worker-quality.mjs [--timeout-min 25] [--preflight-only]
 //   node gates/g2-worker-quality.mjs --issues 34,35 [--allow-existing] [--max-files 6]
+//   node gates/g2-worker-quality.mjs --repo lalanikarim/factory-fixture-2 --preflight-only
+//
+// Which repo is judged comes from the repo registry (factory/repo-registry.json): it supplies the issue
+// eligibility label and the oracleBoot recipe for starting that repo's server. `--repo all` on
+// --regression walks every registered repo; a plain run targets one repo.
 //
 // TARGETS ARE SELECTED BY LABEL, NOT BY NUMBER. With no --issues, every open issue carrying
 // `agent` (override: --target-label) is a target. Each target must also carry exactly one
@@ -25,6 +30,7 @@
 // G2 passes when >= 2 targets (or all of them, when fewer than 2 exist) satisfy A-D.
 
 import { execFile, spawn } from "node:child_process";
+import net from "node:net";
 import { promisify } from "node:util";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,6 +38,7 @@ import { join } from "node:path";
 // NOTE: plain ESM — no TS syntax in .mjs gates (Node's strip-types does not
 // transform .mjs); types are omitted throughout this file.
 import { startIntakeServer } from "../factory/intake.ts";
+import { loadRegistry, requireEnabledRepo, enabledRepos } from "../factory/repo-registry.ts";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath } from "./lib.ts";
 import { loadProbes, probeKeyFromLabels, formatLabels } from "./behavior-probes.mjs";
 
@@ -49,7 +56,6 @@ const opt = (flag, dflt) => {
 // Explicit target list overrides label discovery; use it to evaluate one issue without pulling in
 // every open `agent` issue. Numbers still need their `probe:<key>` label.
 const issuesOpt = opt("--issues", "");
-const targetLabel = opt("--target-label", "agent");
 const preflightOnly = argv.includes("--preflight-only");
 // Run every oracle against fixture main and report. Oracles for already-merged work stay in
 // gates/probes/ without a label for exactly this: they are regression checks, and an oracle that
@@ -65,7 +71,28 @@ const allowExisting = argv.includes("--allow-existing");
 const maxScopeFiles = Number(opt("--max-files", "5"));
 
 loadFactoryEnv();
-const fixturesRepo = process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture";
+// The repo registry (factory/repo-registry.json) decides which repo we judge, which label makes an issue
+// workable there, and how that repo's server is started for behavior oracles. That last one is why
+// this exists: fixture-1 logs "127.0.0.1:<port>" after binding 0, while fixture-2 reads PORT and
+// logs the *requested* value — so a second repo could not be judged with fixture-1's boot recipe.
+const registry = loadRegistry();
+const repoOpt = opt("--repo", process.env.FIXTURES_REPO ?? "lalanikarim/factory-fixture");
+if (repoOpt === "all" && !regression) {
+  console.error("--repo all only applies to --regression; a worker run targets one repo");
+  process.exit(2);
+}
+// "all" is a regression-only pseudo-repo: sweep every registered repo that can be booted. A worker
+// run always targets exactly one repo, so it never resolves this.
+const registryEntry = repoOpt === "all"
+  ? enabledRepos(registry).find((e) => e.oracleBoot)
+  : requireEnabledRepo(registry, repoOpt);
+if (!registryEntry) {
+  console.error("no enabled repo in the registry has an oracleBoot — nothing can be judged (add one to factory/repo-registry.json)");
+  process.exit(2);
+}
+const fixturesRepo = registryEntry.repo;
+// A target label may differ per repo (drydock uses "build" so its own backlog is not auto-picked).
+const targetLabel = opt("--target-label", registryEntry.eligibilityLabel);
 const runDir = await mkdtemp(join(tmpdir(), "gates-g2-"));
 const results = [];
 
@@ -144,9 +171,9 @@ async function runIssue(issueNumber) {
 // ---------------------------------------------------------------------------
 // Objective checks on one branch.
 // ---------------------------------------------------------------------------
-async function cloneBranch(branch) {
+async function cloneBranch(branch, repo = fixturesRepo) {
   const dir = await mkdtemp(join(tmpdir(), `g2-${branch.replace(/\W/g, "")}-`));
-  await sh("git", ["clone", "--quiet", "--branch", branch, `https://github.com/${fixturesRepo}.git`, dir]);
+  await sh("git", ["clone", "--quiet", "--branch", branch, `https://github.com/${repo}.git`, dir]);
   return dir;
 }
 
@@ -170,23 +197,74 @@ async function checkScope(dir, maxFiles = maxScopeFiles) {
   return { files, maxFiles, inScope, ok: inScope && files.length <= maxFiles };
 }
 
-/** Start the branch's server on an ephemeral port; run fn; always stop it. */
-async function withServer(dir, fn) {
-  const child = spawn("node", ["src/server.mjs", "0"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
-  // The fixture server logs its bound port; parse it from stdout.
-  let port = 0;
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("server did not start in 15s")), 15_000);
-    child.stdout.on("data", (d) => {
-      const m = String(d).match(/127\.0\.0\.1:(\d+)/);
-      if (m) {
-        port = Number(m[1]);
-        clearTimeout(timer);
-        resolve();
-      }
+/** Reserve an ephemeral port (close-then-use; a brief race is acceptable for a local oracle). */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const port = probe.address().port;
+      probe.close(() => resolve(port));
     });
-    child.on("exit", (code) => reject(new Error(`server exited early (${code})`)));
   });
+}
+
+const waitForListening = (port, deadlineMs) =>
+  new Promise((resolve, reject) => {
+    const deadline = Date.now() + deadlineMs;
+    const attempt = () => {
+      const sock = net.connect(port, "127.0.0.1");
+      sock.on("connect", () => { sock.destroy(); resolve(); });
+      sock.on("error", () => {
+        sock.destroy();
+        if (Date.now() > deadline) reject(new Error(`nothing listening on 127.0.0.1:${port} within ${deadlineMs}ms`));
+        else setTimeout(attempt, 150);
+      });
+    };
+    attempt();
+  });
+
+/**
+ * Start the candidate branch's server per the registry entry's oracleBoot recipe; run fn; always
+ * stop it. Two port-discovery modes because real fixtures differ: "stdout" parses the bound port out
+ * of the log line (fixture-1), "env" picks a free port ourselves and waits for the socket to accept
+ * (fixture-2 logs the requested port, which is meaningless when we ask for 0).
+ */
+async function withServer(dir, boot, fn) {
+  if (!boot) throw new Error(`${fixturesRepo} has no oracleBoot in factory/repo-registry.json — cannot run behavior oracles`);
+  const env = { ...process.env };
+  let port = 0;
+  if (boot.portFrom === "env") {
+    port = await freePort();
+    env[boot.envPortVar] = String(port);
+  }
+  const child = spawn(boot.command, boot.args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env });
+  // Drain both streams (an unread pipe can block the child) and keep the tail for diagnostics.
+  let tail = "";
+  const drain = (d) => { tail = (tail + String(d)).slice(-4000); return tail; };
+  child.stdout.on("data", drain);
+  child.stderr.on("data", drain);
+  const earlyExit = new Promise((_, reject) => {
+    child.on("exit", (code) => reject(new Error(`server exited early (${code}); output:\n${tail}`)));
+  });
+  // The oracle's own SIGKILL makes this reject after the fact; the race only cares about early exit.
+  earlyExit.catch(() => {});
+  if (boot.portFrom === "stdout") {
+    // The server logs the port it actually bound; wait for that line.
+    await Promise.race([
+      new Promise((resolve) => {
+        const tick = setInterval(() => {
+          const m = tail.match(new RegExp(boot.stdoutPattern));
+          if (m) { clearInterval(tick); port = Number(m[1]); resolve(); }
+        }, 100);
+        setTimeout(() => { clearInterval(tick); reject(new Error(`server did not log a bound port within 15s; output:\n${tail}`)); }, 15_000);
+      }),
+      earlyExit,
+    ]);
+  } else {
+    // We chose the port, so there is nothing to parse — readiness is "the socket accepts".
+    await Promise.race([waitForListening(port, 15_000), earlyExit]);
+  }
   try {
     return await fn(`http://127.0.0.1:${port}`);
   } finally {
@@ -205,8 +283,11 @@ const api = (base, method, path, body) =>
 // The oracle itself lives in gates/probes/<key>.mjs and is selected by the issue's
 // `probe:<key>` label — see gates/behavior-probes.mjs for why this replaced per-issue-number
 // if-blocks (a missing oracle used to surface only after a full worker run).
-async function runProbe(probe, dir) {
-  return withServer(dir, (base) => probe.check({ base, api }));
+async function runProbe(probe, dir, { repo = fixturesRepo, boot = registryEntry.oracleBoot } = {}) {
+  // A probe names the repo whose API it speaks. Running an invoice oracle against the jobs service
+  // would judge nothing — and could accidentally judge something — so cross-repo probes are refused.
+  if (probe.repo !== repo) throw new Error(`probe ${probe.key} targets ${probe.repo}, not ${repo}`);
+  return withServer(dir, boot, (base) => probe.check({ base, api }));
 }
 
 async function evaluateIssue(target, probe) {
@@ -234,36 +315,36 @@ async function evaluateIssue(target, probe) {
 // ---------------------------------------------------------------------------
 // Target resolution + preflight. Everything here runs before a single inference call.
 // ---------------------------------------------------------------------------
-async function fetchIssue(number) {
-  const out = await sh("gh", ["api", `repos/${fixturesRepo}/issues/${number}`, "--jq",
+async function fetchIssue(number, repo = fixturesRepo) {
+  const out = await sh("gh", ["api", `repos/${repo}/issues/${number}`, "--jq",
     "{number,title,state,labels:[.labels[].name]}"]);
   return JSON.parse(out);
 }
 
-async function listOpenIssueNumbers() {
-  const out = await sh("gh", ["api", `repos/${fixturesRepo}/issues?state=open&per_page=100`, "--jq", "[.[].number]"]);
+async function listOpenIssueNumbers(repo = fixturesRepo) {
+  const out = await sh("gh", ["api", `repos/${repo}/issues?state=open&per_page=100`, "--jq", "[.[].number]"]);
   return new Set(JSON.parse(out || "[]"));
 }
 
-async function discoverTargets() {
+async function discoverTargets(repo = fixturesRepo, label = targetLabel) {
   const out = await sh("gh", ["api",
-    `repos/${fixturesRepo}/issues?state=open&labels=${encodeURIComponent(targetLabel)}&per_page=100`,
+    `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
     "--jq", "[.[] | {number,title,labels:[.labels[].name]}]"]);
   return JSON.parse(out || "[]");
 }
 
 /** -> { targets: [{ issue, probe }], problems: string[] } */
-async function resolveTargets(probes) {
-  const numbers = issuesOpt ? issuesOpt.split(",").map((s) => Number(s.trim())).filter(Number.isFinite) : (await discoverTargets()).map((i) => i.number);
+async function resolveTargets(probes, { repo = fixturesRepo, label = targetLabel, numbers: numbersOpt = null } = {}) {
+  const numbers = numbersOpt ?? (issuesOpt ? issuesOpt.split(",").map((s) => Number(s.trim())).filter(Number.isFinite) : (await discoverTargets(repo, label)).map((i) => i.number));
   if (numbers.length === 0) {
-    return { targets: [], problems: [`no open issues labeled "${targetLabel}" in ${fixturesRepo} — label a target or pass --issues`] };
+    return { targets: [], problems: [`no open issues labeled "${label}" in ${repo} — label a target or pass --issues`] };
   }
   const targets = [];
   const problems = [];
   for (const n of numbers) {
     let issue;
     try {
-      issue = await fetchIssue(n);
+      issue = await fetchIssue(n, repo);
     } catch (e) {
       problems.push(`#${n}: not readable (${e.message.split("\n")[0]})`);
       continue;
@@ -284,19 +365,25 @@ async function resolveTargets(probes) {
       problems.push(`#${n}: probe:${key} has no module in gates/probes/ (typo, or the oracle was deleted)`);
       continue;
     }
+    if (probe.repo !== repo) {
+      // The label is resolvable but names another repo's oracle: judging this issue with it would be
+      // meaningless, so treat it as an unresolvable target rather than silently skipping the check.
+      problems.push(`#${n}: probe:${key} belongs to ${probe.repo}, not ${repo}`);
+      continue;
+    }
     targets.push({ issue, probe });
   }
   return { targets, problems };
 }
 
 /** Every oracle must fail against main, or it is not an oracle. */
-async function checkFailToPass(targets) {
-  const dir = await cloneBranch("main");
+async function checkFailToPass(targets, { repo = fixturesRepo, boot = registryEntry.oracleBoot } = {}) {
+  const dir = await cloneBranch("main", repo);
   const problems = [];
   for (const { issue, probe } of targets) {
     let res;
     try {
-      res = await runProbe(probe, dir);
+      res = await runProbe(probe, dir, { repo, boot });
     } catch (e) {
       problems.push(`#${issue.number}: oracle ${probe.key} errored against main (${e.message.split("\n")[0]})`);
       continue;
@@ -314,31 +401,47 @@ if (regression) {
   // Claimed oracles are expected to fail there (that is what makes their issue a target), so
   // they never count as regressions — but one that passes on main means the work landed and the
   // target is stale, which gets reported.
-  const { targets: live } = await resolveTargets(probes);
-  const claimed = new Map(live.map((t) => [t.probe.key, t.issue.number]));
-  const openIssues = await listOpenIssueNumbers();
-  const dir = await cloneBranch("main");
+  //
+  // `--repo all` sweeps every registered repo; otherwise just the selected one. Grouping by repo is
+  // what makes a second fixture judgeable at all: each group boots with its own oracleBoot recipe.
+  const repos = repoOpt === "all" ? enabledRepos(registry).filter((e) => e.oracleBoot) : [registryEntry];
   let regressed = 0;
-  console.log(`G2 regression: ${probes.size} oracles against ${fixturesRepo}@main (${live.length} claimed by live targets)`);
-  for (const probe of probes.values()) {
-    let res;
-    try {
-      res = await runProbe(probe, dir);
-    } catch (e) {
-      res = { ok: false, detail: e.message.split("\n")[0] };
+  for (const entry of repos) {
+    const group = [...probes.values()].filter((p) => p.repo === entry.repo);
+    if (!entry.oracleBoot) {
+      console.log(`\n${entry.repo}: SKIPPED — no oracleBoot in factory/repo-registry.json (${group.length} oracle(s) unrunnable)`);
+      continue;
     }
-    const claim = claimed.get(probe.key);
-    if (claim !== undefined) {
-      console.log(`  ${res.ok ? "STALE" : "open "} #${claim} ${probe.key}: ${res.ok ? "oracle already passes on main — target is implemented, retarget or close it" : "expected to fail until the target lands"}`);
-    } else if (res.ok) {
-      console.log(`  ok      ${probe.key}: ${res.detail}`);
-    } else if (probe.sourceIssue !== undefined && openIssues.has(probe.sourceIssue)) {
-      // Not a regression: this behavior was never shipped. Issue #18 is exactly this case — an
-      // open draft PR, so main still fails the oracle. It IS a missing target, so say so.
-      console.log(`  UNTARGET #${probe.sourceIssue} ${probe.key}: unsatisfied on main and its issue is still open — label it (agent + probe:${probe.key}) or close the issue`);
-    } else {
-      regressed += 1;
-      console.log(`  REGRESS ${probe.key}${probe.sourceIssue !== undefined ? ` (specified by #${probe.sourceIssue}, now closed)` : ""}: ${res.detail}`);
+    if (group.length === 0) {
+      console.log(`\n${entry.repo}: no oracles registered for this repo`);
+      continue;
+    }
+    const { targets: live, problems } = await resolveTargets(probes, { repo: entry.repo, label: entry.eligibilityLabel, numbers: null });
+    const claimed = new Map(live.map((t) => [t.probe.key, t.issue.number]));
+    const openIssues = await listOpenIssueNumbers(entry.repo);
+    const dir = await cloneBranch("main", entry.repo);
+    console.log(`\n${entry.repo}: ${group.length} oracles against main (${live.length} claimed by live targets)`);
+    for (const p of problems) console.log(`  LABEL    ${p}`);
+    for (const probe of group) {
+      let res;
+      try {
+        res = await runProbe(probe, dir, { repo: entry.repo, boot: entry.oracleBoot });
+      } catch (e) {
+        res = { ok: false, detail: e.message.split("\n")[0] };
+      }
+      const claim = claimed.get(probe.key);
+      if (claim !== undefined) {
+        console.log(`  ${res.ok ? "STALE  " : "open "} #${claim} ${probe.key}: ${res.ok ? "oracle already passes on main — target is implemented, retarget or close it" : "expected to fail until the target lands"}`);
+      } else if (res.ok) {
+        console.log(`  ok      ${probe.key}: ${res.detail}`);
+      } else if (probe.sourceIssue !== undefined && openIssues.has(probe.sourceIssue)) {
+        // Not a regression: this behavior was never shipped. Issue #18 is exactly this case — an
+        // open draft PR, so main still fails the oracle. It IS a missing target, so say so.
+        console.log(`  UNTARGET #${probe.sourceIssue} ${probe.key}: unsatisfied on main and its issue is still open — label it (${entry.eligibilityLabel} + probe:${probe.key}) or close the issue`);
+      } else {
+        regressed += 1;
+        console.log(`  REGRESS ${probe.key}${probe.sourceIssue !== undefined ? ` (specified by #${probe.sourceIssue}, now closed)` : ""}: ${res.detail}`);
+      }
     }
   }
   console.log(`\nG2 regression ${regressed === 0 ? "PASS" : `FAIL — ${regressed} oracle(s) no longer hold against main`}`);
@@ -356,9 +459,14 @@ const claimed = new Set(targets.map((t) => t.probe.key));
 for (const { issue, probe } of targets) {
   console.log(`  #${issue.number} [${formatLabels(issue.labels)}] -> ${probe.key}: ${probe.title}`);
 }
-const unclaimed = [...probes.keys()].filter((k) => !claimed.has(k));
+const sameRepo = [...probes.values()].filter((p) => p.repo === fixturesRepo);
+const unclaimed = sameRepo.filter((p) => !claimed.has(p.key));
 if (unclaimed.length) {
-  console.log(`  (${unclaimed.length} further oracles cover merged work — run --regression to re-check them against main)`);
+  console.log(`  (${unclaimed.length} further ${fixturesRepo} oracles cover merged work — run --regression to re-check them against main)`);
+}
+const otherRepos = [...new Set([...probes.values()].filter((p) => p.repo !== fixturesRepo).map((p) => p.repo))];
+if (otherRepos.length) {
+  console.log(`  (${probes.size - sameRepo.length} oracle(s) belong to other registry repos: ${otherRepos.join(", ")} — run with --repo <name> or --regression --repo all)`);
 }
 for (const p of problems) console.log(`  PROBLEM ${p}`);
 if (preflightOnly) {
