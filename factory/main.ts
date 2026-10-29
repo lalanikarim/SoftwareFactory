@@ -20,7 +20,7 @@ import { instanceGatesConfig } from "./gate-policy.ts";
 import { createCoreInstance, loadConfig } from "../vendor/engram/app/src/core.ts";
 import { loadFactoryConfig } from "./factory-config.ts";
 import { factoryPipeline, orchestratorInstructions } from "./pipeline.ts";
-import { loadRegistry, requireEnabledRepo } from "./repo-registry.ts";
+import { loadRegistry, requireEnabledRepo, scopeOf } from "./repo-registry.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -140,6 +140,7 @@ async function main() {
     workDir: workRoot,
     fixturesRepo: factoryCfg.repo,
     autoMerge: policy.autoMerge,
+    pathScope: scopeOf(policy),
     ghToken: process.env.FACTORY_GITHUB_TOKEN ?? factoryCfg.gitToken,
     modelRef: await resolveModelRef(factoryCfg.models),
     image,

@@ -32,6 +32,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PathScope } from "./path-scope.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_REGISTRY_PATH = join(HERE, "repo-registry.json");
@@ -67,12 +68,32 @@ export interface RepoEntry {
    * disabled entry (enabling a repo without runtime config is a validation error). */
   configFile: string | null;
   oracleBoot: OracleBoot | null;
+  /** Prefixes a pipeline run may change; null = any non-protected path. See factory/path-scope.ts. */
+  pathAllowlist: string[] | null;
+  /** Never-change prefixes in addition to the unconditional `vendor/` protection. */
+  protectedPaths: string[];
   note?: string;
 }
 
 export interface Registry {
   defaults: typeof REGISTRY_DEFAULTS;
   repos: RepoEntry[];
+}
+
+/** Validate a list of repo-relative path prefixes (allowlist or protected). */
+function validatePathList(raw: unknown, field: string, { allowNull = false }: { allowNull?: boolean } = {}): string[] | null {
+  if (raw === undefined || raw === null) return allowNull ? null : [];
+  if (!Array.isArray(raw)) throw new Error(`${field} must be an array of repo-relative path prefixes`);
+  if (raw.length === 0) throw new Error(`${field} must not be an empty array — omit it to mean "unrestricted"`);
+  for (const p of raw) {
+    if (typeof p !== "string" || !p.trim()) throw new Error(`${field} entries must be non-empty strings`);
+    if (isAbsolute(p) || p.startsWith("./") || normalize(p).startsWith("..")) {
+      throw new Error(`${field} entries must be repo-relative without traversal, got: ${p}`);
+    }
+    if (p.includes("\\")) throw new Error(`${field} entries must use "/" separators, got: ${p}`);
+    checkNoShell(p, `${field} entry`);
+  }
+  return [...raw] as string[];
 }
 
 function checkNoShell(value: string, field: string): void {
@@ -141,7 +162,7 @@ export function validateRegistry(raw: unknown): Registry {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`registry.repos[${i}] must be an object`);
     const r = entry as Record<string, unknown>;
     for (const key of Object.keys(r)) {
-      if (!["repo", "enabled", "autoMerge", "eligibilityLabel", "configFile", "oracleBoot", "note"].includes(key)) {
+      if (!["repo", "enabled", "autoMerge", "eligibilityLabel", "configFile", "oracleBoot", "pathAllowlist", "protectedPaths", "note"].includes(key)) {
         throw new Error(`registry.repos[${i}]: unknown field: ${key}`);
       }
     }
@@ -178,6 +199,8 @@ export function validateRegistry(raw: unknown): Registry {
       eligibilityLabel,
       configFile,
       oracleBoot: validateOracleBoot(r.oracleBoot, repo),
+      pathAllowlist: validatePathList(r.pathAllowlist, `${repo}: pathAllowlist`, { allowNull: true }),
+      protectedPaths: validatePathList(r.protectedPaths, `${repo}: protectedPaths`) ?? [],
       ...(typeof r.note === "string" ? { note: r.note } : {}),
     };
   });
@@ -216,6 +239,11 @@ export function requireRepo(registry: Registry, repo: string): RepoEntry {
   const hit = registry.repos.find((r) => r.repo === repo);
   if (!hit) throw new Error(`${repo} is not in the repo registry (known: ${registryRepoNames(registry).join(", ")})`);
   return hit;
+}
+
+/** The path scope a pipeline run must obey for this repo (see factory/path-scope.ts). */
+export function scopeOf(entry: RepoEntry): PathScope {
+  return { allowlist: entry.pathAllowlist, protectedPaths: entry.protectedPaths };
 }
 
 /** Like requireRepo but rejects disabled entries — use for anything that would act on a repo. */

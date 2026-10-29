@@ -1,5 +1,5 @@
 {
-  "$comment": "Repo registry (policy, no secrets): which repos the factory manages and what it is allowed to do in each. Runtime config stays in factory/config/<owner>_<repo>.json; the per-deployment supervision file with webhook secrets lives in fleet/. Two decisions are policy because their failure mode is not a crash: whether a repo may be auto-merged, and which label makes an issue eligible for pickup. See research/multi-repo-factory-plan.md §5.11.",
+  "$comment": "Repo registry (policy, no secrets): which repos the factory manages and what it is allowed to do in each. Runtime config stays in factory/config/<owner>_<repo>.json; the per-deployment supervision file with webhook secrets lives in fleet/. Three decisions are policy because their failure mode is not a crash: whether a repo may be auto-merged, which label makes an issue eligible for pickup, and which paths a run may change (pathAllowlist; vendor/ is protected everywhere regardless). See research/multi-repo-factory-plan.md §5.11.",
   "defaults": {
     "eligibilityLabel": "agent",
     "autoMerge": true,
@@ -9,6 +9,7 @@
     {
       "repo": "lalanikarim/factory-fixture",
       "configFile": "factory/config/lalanikarim_factory-fixture.json",
+      "pathAllowlist": ["src/", "test/", "README.md"],
       "oracleBoot": {
         "command": "node",
         "args": ["src/server.mjs", "0"],
@@ -19,6 +20,7 @@
     {
       "repo": "lalanikarim/factory-fixture-2",
       "configFile": "factory/config/lalanikarim_factory-fixture-2.json",
+      "pathAllowlist": ["src/", "test/", "README.md"],
       "oracleBoot": {
         "command": "node",
         "args": ["src/server.js"],
@@ -31,6 +33,7 @@
       "enabled": false,
       "autoMerge": false,
       "configFile": "factory/config/lalanikarim_drydock.json",
+      "pathAllowlist": ["factory/", "fleet/", "gates/", "test/", "research/"],
       "eligibilityLabel": "build",
       "note": "N3 dogfood target. Disabled: no deployment fleet file or GitHub webhook for this repo yet, so nothing should be running a factory here. autoMerge is false permanently — drydock runs would stop at the draft PR for a human to merge (§5.11)."
     }
