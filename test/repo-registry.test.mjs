@@ -1,5 +1,5 @@
 // Repo registry tests (factory/repo-registry.json + factory/repo-registry.ts).
-//   node --experimental-strip-types --test test/registry-config.test.mjs
+//   node --experimental-strip-types --test test/repo-registry.test.mjs
 //
 // The registry is where "may the pipeline merge here?" and "which label makes an issue workable?"
 // are answered for every repo, so its validation rules are the safety surface: a typo'd entry must
@@ -15,6 +15,7 @@ const { validateRegistry, loadRegistry, requireRepo, requireEnabledRepo, enabled
   "../factory/repo-registry.ts"
 );
 const { loadProbes } = await import("../gates/behavior-probes.mjs");
+const { loadFactoryConfig } = await import("../factory/factory-config.ts");
 
 const BOOT_STDOUT = { command: "node", args: ["src/server.mjs", "0"], portFrom: "stdout", stdoutPattern: "127\\.0\\.0\\.1:(\\d+)" };
 const BOOT_ENV = { command: "node", args: ["src/server.js"], portFrom: "env", envPortVar: "PORT" };
@@ -131,6 +132,19 @@ test("drydock is registered but neither enabled nor auto-mergeable", () => {
   assert.equal(drydock.enabled, false, "no intake adapter yet — enabling it starts the factory on its own repo");
   assert.equal(drydock.autoMerge, false, "the factory must never merge into the repo holding the research record");
   assert.notEqual(drydock.eligibilityLabel, "agent", "drydock's own backlog is not factory work by default");
+});
+
+test("every registry entry's runtime config parses, including disabled repos", () => {
+  // A disabled entry is still checked in and reviewed; discovering that drydock's config has a bad
+  // field on the day we finally enable it is the worst possible time. loadRegistry checks existence,
+  // this checks content: it satisfies the runtime schema and agrees about repo identity.
+  const registry = loadRegistry();
+  for (const entry of registry.repos) {
+    if (!entry.configFile) continue;
+    const cfg = loadFactoryConfig(join(ROOT, entry.configFile));
+    assert.equal(cfg.repo, entry.repo, `${entry.configFile} declares ${cfg.repo}, registry says ${entry.repo}`);
+    assert.ok(cfg.testCommand.length > 0, `${entry.repo} must declare how it is tested`);
+  }
 });
 
 test("every oracle declares a repo, and every oracle repo is in the registry", async () => {

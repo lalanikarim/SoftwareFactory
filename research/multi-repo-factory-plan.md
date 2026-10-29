@@ -324,3 +324,22 @@ node --experimental-strip-types gates/g2-worker-quality.mjs --regression --repo 
 node --experimental-strip-types --test test/repo-registry.test.mjs      # registry shape + probe/registry cross-checks
 node --experimental-strip-types --test test/repo-enforcement.test.mjs   # policy → capabilities
 ```
+
+### 5.12 What drydock-as-a-managed-repo actually requires (measured 2026-10-28)
+
+N3 has always been described as "onboard drydock under its own factory", which invites thinking about it as a big change. The pipeline's contract with any repo is three things: **clone → setup → `testCommand`**, everything else (review, draft PR, approval) is repo-agnostic. So the question is empirical: can that chain succeed on *this* repo? Measured on a clean clone of `main`, not inferred:
+
+| Step | Result |
+|---|---|
+| Host clone | `factory/worker.ts` already clones with `--recurse-submodules`, so `vendor/engram` arrives at the pinned tag (`a764e36`, v0.2.0) — the "submodule-aware clone" item on N3's row needed **no code** |
+| Dependency install | `npm ci` in the clean clone succeeds (lockfile present; warm npm cache made it ~2 s) |
+| Verification command | `npm test` → **exit 0** in that clean clone, with no `.env`, no running supervisor and no container-side work — so a worker's success criterion is satisfiable on drydock as-is |
+| Setup container | sandbox image has node v24.22.1 / npm 11.19.1 and the registry is reachable from it (`--network bridge`, `npm ping` → PONG 474 ms), so `setupCommand: "npm ci"` works and lands `node_modules` in the mounted workspace before the sealed run |
+
+Added: `factory/config/lalanikarim_drydock.json` (`testCommand: npm test`, `setupCommand: npm ci`, `wallSecsPerIssue: 2400` — real drydock work spans more files than a fixture issue) and the registry entry now points at it. New invariant in `test/repo-registry.test.mjs`: **every** entry's `configFile` must parse against the runtime schema and agree on repo identity, *including disabled repos* — finding a bad field in drydock's config on the day we enable it is the worst possible time.
+
+The registry entry stays `enabled: false`. What remains before N3 flips it is deployment, plus three risks worth naming now:
+
+- **Recursion.** A repo's own `testCommand` must never include gates that mutate GitHub (G1 opens PRs, G4 merges). `npm test` is safe today precisely because it is unit-only — that is a property to preserve, not an accident to rediscover.
+- **A green suite is a weak judge here.** For fixtures we have behavior oracles; for drydock the worker would be graded by the same suite it can edit. G2/G3 should stay in the loop for self-work rather than trusting `npm test` alone.
+- **Nothing stops a worker touching `vendor/engram`.** The 5-file / `src|test` scope rule lives in the G2 harness, not the pipeline, and submodule pointer changes are exactly the kind of edit that passes tests while being unacceptable. Candidate fix: a per-repo path allowlist in the registry, enforced by `open_draft_pr` before push.
