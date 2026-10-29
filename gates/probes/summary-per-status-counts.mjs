@@ -12,6 +12,10 @@
  * `detail` must be self-diagnosing: it is the only thing printed on failure.
  */
 export const key = "summary-per-status-counts";
+
+// Which fleet repo this oracle boots against (factory/repo-registry.json). Selection is by label; this is a
+// guard so an invoice oracle can never be run against the jobs service and silently "pass".
+export const repo = "lalanikarim/factory-fixture";
 // Provenance only — never used to select this oracle (labels do that). Lets --regression tell
 // "this feature's issue is still open" apart from "this shipped feature regressed".
 export const sourceIssue = 28;

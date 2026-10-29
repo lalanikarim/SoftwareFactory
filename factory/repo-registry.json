@@ -1,0 +1,37 @@
+{
+  "$comment": "Repo registry (policy, no secrets): which repos the factory manages and what it is allowed to do in each. Runtime config stays in factory/config/<owner>_<repo>.json; the per-deployment supervision file with webhook secrets lives in fleet/. Two decisions are policy because their failure mode is not a crash: whether a repo may be auto-merged, and which label makes an issue eligible for pickup. See research/multi-repo-factory-plan.md §5.11.",
+  "defaults": {
+    "eligibilityLabel": "agent",
+    "autoMerge": true,
+    "enabled": true
+  },
+  "repos": [
+    {
+      "repo": "lalanikarim/factory-fixture",
+      "configFile": "factory/config/lalanikarim_factory-fixture.json",
+      "oracleBoot": {
+        "command": "node",
+        "args": ["src/server.mjs", "0"],
+        "portFrom": "stdout",
+        "stdoutPattern": "127\\.0\\.0\\.1:(\\d+)"
+      }
+    },
+    {
+      "repo": "lalanikarim/factory-fixture-2",
+      "configFile": "factory/config/lalanikarim_factory-fixture-2.json",
+      "oracleBoot": {
+        "command": "node",
+        "args": ["src/server.js"],
+        "portFrom": "env",
+        "envPortVar": "PORT"
+      }
+    },
+    {
+      "repo": "lalanikarim/drydock",
+      "enabled": false,
+      "autoMerge": false,
+      "eligibilityLabel": "build",
+      "note": "N3 dogfood target. Disabled until an intake adapter exists; autoMerge stays false permanently — the factory opens draft PRs against its own repo and a human merges (§5.11)."
+    }
+  ]
+}
