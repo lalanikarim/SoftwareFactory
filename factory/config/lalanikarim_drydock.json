@@ -1,0 +1,13 @@
+{
+  "repo": "lalanikarim/drydock",
+  "models": {
+    "provider": "aurora",
+    "modelId": "auto"
+  },
+  "testCommand": "npm test",
+  "setupCommand": "npm ci",
+  "budgets": {
+    "wallSecsPerIssue": 2400,
+    "maxReviewRetries": 2
+  }
+}
