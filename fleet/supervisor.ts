@@ -31,6 +31,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { loadRegistry, requireEnabledRepo } from "../factory/repo-registry.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
@@ -56,6 +57,18 @@ interface Fleet {
   factories: FactoryEntry[];
 }
 
+/**
+ * Policy gate between the two config layers (§5.11): the fleet file says what should be RUNNING,
+ * the repo registry says what is ALLOWED. Checking every fleet entry against the registry here means
+ * a stale or hand-edited fleet file cannot start a factory for a repo policy does not permit —
+ * unregistered, or registered but disabled (e.g. drydock itself, whose self-hosting entry exists
+ * precisely to say "not yet"). Runs before any child is spawned.
+ */
+export function checkRegistryPolicy(repos: string[], registryPath?: string): void {
+  const registry = loadRegistry(registryPath);
+  for (const repo of repos) requireEnabledRepo(registry, repo);
+}
+
 function loadFleet(path: string): Fleet {
   let raw: unknown;
   try {
@@ -79,6 +92,7 @@ function loadFleet(path: string): Fleet {
       throw new Error(`factory ${f.repo} has no webhook secret (fleet entry .secret or GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")})`);
     }
   }
+  checkRegistryPolicy(fleet.factories.map((f) => f.repo));
   return fleet;
 }
 
@@ -248,18 +262,23 @@ async function statusFleet(fleetPath: string): Promise<void> {
   }
 }
 
-const [cmd, fleetPath] = process.argv.slice(2);
-if (cmd === "run" && fleetPath) {
-  runFleet(fleetPath).catch((e) => {
-    console.error("[supervisor] fatal:", e);
+// CLI guard: importing this module (tests pull in checkRegistryPolicy) must not consume argv or
+// call process.exit — which is what the previous unconditional block did to any importer.
+const isDirectRun = Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  const [cmd, fleetPath] = process.argv.slice(2);
+  if (cmd === "run" && fleetPath) {
+    runFleet(fleetPath).catch((e) => {
+      console.error("[supervisor] fatal:", e);
+      process.exit(1);
+    });
+  } else if (cmd === "status" && fleetPath) {
+    statusFleet(fleetPath).catch((e) => {
+      console.error("[supervisor] fatal:", e);
+      process.exit(1);
+    });
+  } else {
+    console.error("usage: fleet/supervisor.ts run <fleet.json> | status <fleet.json>");
     process.exit(1);
-  });
-} else if (cmd === "status" && fleetPath) {
-  statusFleet(fleetPath).catch((e) => {
-    console.error("[supervisor] fatal:", e);
-    process.exit(1);
-  });
-} else {
-  console.error("usage: fleet/supervisor.ts run <fleet.json> | status <fleet.json>");
-  process.exit(1);
+  }
 }

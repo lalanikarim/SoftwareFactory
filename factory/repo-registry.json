@@ -31,7 +31,7 @@
       "enabled": false,
       "autoMerge": false,
       "eligibilityLabel": "build",
-      "note": "N3 dogfood target. Disabled until an intake adapter exists; autoMerge stays false permanently — the factory opens draft PRs against its own repo and a human merges (§5.11)."
+      "note": "N3 dogfood target. Disabled: no deployment fleet file or GitHub webhook for this repo yet, so nothing should be running a factory here. autoMerge is false permanently — drydock runs would stop at the draft PR for a human to merge (§5.11)."
     }
   ]
 }
