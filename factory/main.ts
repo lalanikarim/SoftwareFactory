@@ -152,8 +152,8 @@ async function main() {
   };
   const ext = factoryPipeline(pipelineOpts);
   const rootToolNames = policy.autoMerge
-    ? ["delegate", "open_draft_pr", "merge_pr", "note_lesson"]
-    : ["delegate", "open_draft_pr", "note_lesson"];
+    ? ["delegate", "open_draft_pr", "pr_status", "merge_pr", "note_lesson"]
+    : ["delegate", "open_draft_pr", "pr_status", "note_lesson"];
   const rootTools = (ext.tools ?? []).filter((t) => rootToolNames.includes(t.name));
   if (!policy.autoMerge) {
     console.log(`[factory] ${repo}: registry policy autoMerge=false — merge_pr is not offered; runs stop at the draft PR for a human to merge`);

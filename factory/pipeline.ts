@@ -17,7 +17,7 @@ import { defineExtension } from "@earendil-works/pi-durable";
 import { factoryWorkerTask, factoryDelegateTool } from "./worker.ts";
 import { factoryReviewerTask, makeReviewerRoleTools } from "./reviewer.ts";
 import { openDraftPrTool } from "./open-draft-pr.ts";
-import { mergePrTool } from "./merge-gate.ts";
+import { mergePrTool, prStatusTool } from "./merge-gate.ts";
 import { noteLessonTool } from "./lessons.ts";
 import type { PathScope } from "./path-scope.ts";
 
@@ -31,7 +31,7 @@ import type { PathScope } from "./path-scope.ts";
  */
 export function orchestratorInstructions({ autoMerge = true }: { autoMerge?: boolean } = {}): string {
   const step6 = autoMerge
-    ? '6. Call merge_pr with {"issueNumber": <n>} to merge the draft PR. The core approval hook blocks this call until a human approves its key; do not retry while it is blocked — report that the merge is awaiting approval and stop. If it returns { alreadyMerged: true } or { error: "already merged" }, the PR was merged out-of-band; note it and continue.'
+    ? '6. Call pr_status with {"issueNumber": <n>} to read the PR\'s current headSha, then call merge_pr with {"issueNumber": <n>, "headSha": "<that sha>"}. The core approval hook blocks this call until a human approves its key, and that approval authorizes exactly the commit named in headSha — so never pass a sha you did not read from pr_status or open_draft_pr, and never retry with a different sha on your own. Do not retry while it is blocked: report that the merge is awaiting approval (include the headSha) and stop. If it returns { alreadyMerged: true }, the PR was merged out-of-band; note it and continue. If it reports HEAD MISMATCH, the branch was rewritten: do not re-approve anything yourself — report the new head sha and stop.'
     : '6. STOP here. This repository\'s policy does not allow the factory to merge, so you have no merge tool and must not attempt one by another route (no `gh pr merge`, no git push to the base branch). Report that the draft PR is ready for human review and end your turn.';
   const step7 = '7. Call note_lesson with {"text": "<one durable lesson, e.g. a review concern that recurred>"} only when this run produced a genuinely reusable finding for future runs of THIS repo. Skip otherwise.';
   return [
@@ -108,6 +108,10 @@ export function factoryPipeline(opts: PipelineOptions) {
         testCommand: opts.testCommand,
         pathScope: opts.pathScope,
       }),
+      // Read-only PR state, registered for every repo including autoMerge=false ones: merge_pr needs
+      // the current head sha (#47 byte-scoped approval) and the orchestrator must be able to read it
+      // without burning a destructive approval on a discovery call.
+      prStatusTool({ fixturesRepo: opts.fixturesRepo, ghToken: opts.ghToken ?? "" }),
       // Capability removal, not a runtime check: with autoMerge=false the orchestrator never sees a
       // merge tool, so a policy violation would require inventing one rather than misclicking.
       ...(opts.autoMerge === false

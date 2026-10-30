@@ -14,7 +14,8 @@ const ext = factoryPipeline({
   modelRef: { provider: "openai-completions", modelId: "test-model" },
 });
 
-// Tools: the four orchestrator tools + the three reviewer role tools.
+// Tools: the five orchestrator tools + the three reviewer role tools. pr_status is the read-only
+// PR-state reader merge_pr's byte-scoped approval depends on (#47).
 const toolNames = (ext.tools ?? []).map((t) => t.name).sort();
 assert.deepStrictEqual(toolNames, [
   "delegate",
@@ -22,6 +23,7 @@ assert.deepStrictEqual(toolNames, [
   "merge_pr",
   "note_lesson",
   "open_draft_pr",
+  "pr_status",
   "run_tests",
   "submit_verdict",
 ]);
@@ -39,9 +41,13 @@ assert.equal(byName.note_lesson.replay, "unsafe");
 assert.equal(byName.git_diff.replay, "safe");
 assert.equal(byName.run_tests.replay, "safe");
 
-// Gate shape: merge_pr's parameter is exactly {"issueNumber": <int>} so the
-// instance gates.json destructive pattern matches every real call.
+// Gate shape: merge_pr takes {"issueNumber": <int>, "headSha": <string>}. headSha is required
+// because approval keys hash the arguments — including it is what makes a human approval cover a
+// specific commit instead of whatever the PR points at when the retry runs (#47). Gating is by tool
+// name (factory/gate-policy.ts tiers), so widening args cannot un-gate the tool.
 const mergeParams = byName.merge_pr.parameters;
-assert.deepEqual(Object.keys(mergeParams.properties ?? {}).sort(), ["issueNumber"]);
+assert.deepEqual(Object.keys(mergeParams.properties ?? {}).sort(), ["headSha", "issueNumber"]);
+assert.deepEqual([...(mergeParams.required ?? [])].sort(), ["headSha", "issueNumber"]);
+assert.equal(byName.pr_status.replay, "safe", "reading PR state must never need an approval");
 
 console.log("factory pipeline extension shape: OK");
