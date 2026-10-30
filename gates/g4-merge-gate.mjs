@@ -19,6 +19,12 @@
 // durable-decision record check (GET /approvals/<key>); exactly-once is proven
 // by verifySingleMerge.
 //
+// #47 adds a second assertion on the same mechanism: because approval keys hash the tool
+// arguments, merge_pr's headSha argument makes the human decision byte-scoped. This battery now
+// fails if the pending approval does not name the commit whose evidence was verified — previously
+// the only protection against approving H1 and landing H2 lived here, in the harness, and covered
+// nothing outside it.
+//
 // Targets existing draft PRs from G2/G3 (no worker re-run): by default issue #4
 // (PR #9) for T1 and issue #2 (PR #7) for T2; override with G4_T1_ISSUE /
 // G4_T2_ISSUE. NOTE: passing this gate MERGES the target PRs on the fixture
@@ -177,7 +183,7 @@ async function runMergeFlow({ label, issue, crashAfterPending, mode = "merge" })
 
     const directive = mode === "work"
       ? `Work on GitHub issue number: ${issue}.`
-      : `Merge pull request for issue number: ${issue}.`;
+      : `Merge pull request for issue number: ${issue}. Read its current head sha with pr_status first, then call merge_pr with that headSha.`;
     await postTask(instance.base, instance.token, directive, `g4-${label}-${mode}`);
     ev(`submitted-${mode}-directive`);
 
@@ -195,6 +201,17 @@ async function runMergeFlow({ label, issue, crashAfterPending, mode = "merge" })
     result.evidence = await checkEvidence(prNow);
     result.expectedHeadSha = prNow.headRefOid;
     ev("evidence-checked", { prNumber: prNow.number, ok: result.evidence.ok, missing: result.evidence.missing });
+
+    // #47: the pending approval must name the commit whose evidence we just checked. Approval keys
+    // hash the tool arguments, so a headSha in args is what turns a human "approve" into "merge THIS
+    // commit" instead of "merge whatever this PR points at when the retry finally runs".
+    const approvedSha = pending.args?.headSha ?? null;
+    if (approvedSha !== result.expectedHeadSha) {
+      throw new Error(
+        `approval is not bound to the verified commit: pending args headSha=${JSON.stringify(approvedSha)} != verified head ${result.expectedHeadSha}`,
+      );
+    }
+    ev("approval-bound-to-commit", { headSha: approvedSha, key: pending.key });
 
     if (crashAfterPending) {
       // G4 crash test: SIGKILL while the merge approval is pending.

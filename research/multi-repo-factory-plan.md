@@ -370,3 +370,31 @@ branch pushed to origin? NO — nothing was pushed
 **Considered and declined:** making the G2 harness read its scope rule from the registry. The harness rule is intentionally stricter (it also bounds file *count*, and it runs on a checkout rather than pre-push), and silently unifying them would couple a review heuristic to a safety control — if one day they must agree, that should be an explicit decision, not a refactor side effect.
 
 **Still true after this:** scope is about paths, not content. A worker can still write terrible code inside `src/`; that is what the reviewer and G2/G3 are for. And `autoMerge` remains separately enforced (§5.11) — path scope says what may change, auto-merge says whether it may land.
+
+### 5.14 Approvals are byte-scoped: `merge_pr` only lands the commit it was approved for (2026-10-30, #47)
+
+**The defect.** `open_draft_pr` force-with-leases its branch (deleting it instead would auto-close the tracking PR), so when main moves and an issue is retried, head goes H1 → H2 *and the PR body's evidence is regenerated for H2*. An approval that said "merge PR #N" was therefore an approval of no particular bytes: observed 2026-10-28 on stale drafts for issues #35/#18/#34, where exactly-once merge held but `single-merge-verified` reported `ok:false` — the commit that landed was not the commit whose review and test evidence had been checked, and the old head became unreferenced. The only guard was a head comparison inside the G4 harness, which protects a battery run and nothing else.
+
+**The fix uses the kernel's own mechanism instead of adding a second one.** `approvalKeyFor(name, args)` hashes the tool arguments (vendor/engram `app/src/extensions/approvals.ts`), so putting the verified head sha in `merge_pr`'s arguments makes the durable decision byte-scoped by construction:
+
+| Change | Why |
+|---|---|
+| `merge_pr({ issueNumber, headSha })`, `headSha` required, full 40 hex | the approval key now *is* commit-scoped; approving means "merge this commit" |
+| exact full-length comparison only (`headShaMatches`) | shas are machine-supplied, so accepting a 7-char prefix would buy nothing and weaken the binding |
+| new read-only `pr_status` tool | the orchestrator must be able to read the current head *without* triggering a destructive approval; otherwise every merge burns one on discovery. Registered for `autoMerge:false` repos too — it is how a human checks a draft-only repo's branch |
+| refusal discloses the real head | a mismatch is recoverable in one round trip, and the retry needs its own approval — which is the point: re-approval now requires looking at the new commit |
+| merge commit parents verified to contain the approved sha (`approvedCommitLanded`) | closes the residual window by proof, not prevention (see below) |
+| G4 asserts the pending approval's `args.headSha` equals the head whose evidence it verified | the guarantee is now checked in the gate, not assumed |
+
+**Residual window, stated rather than glossed.** Between our `gh pr view` and GitHub actually merging (seconds) the head can still move, and GitHub's merge API accepts no expected-head precondition — so this is *detected*, not prevented: the landed merge commit's parents are checked for the approved sha, and a mismatch or an unverifiable parent list reports `approvedCommitLanded: false`/`"unknown"` with a warning instead of a clean success. `alreadyMerged` retries behave the same way (`landedHeadMatched`), so a stale retry can never claim success for different bytes.
+
+**Verified.** `test/merge-head-binding.test.mjs`: comparison semantics (case-insensitive, prefix-rejecting), schema shape (`headSha` required; `pr_status.replay === "safe"`), and — against real PRs — the terminal-state path on merged fixture-2 #11 (`alreadyMerged: true, landedHeadMatched: false` + warning) and the refusal path on open draft fixture-1 #48:
+
+```
+pr_status  : {"prNumber":48,"state":"OPEN","isDraft":true,"headSha":"990bf283…","mergeStateStatus":"CLEAN"}
+merge_pr   : {"error":"HEAD MISMATCH: PR #48 head is 990bf283… but merge_pr was called with headSha="ffff…"
+              No merge attempted. … call merge_pr again with {"issueNumber": 42, "headSha": "990bf283…"}"}
+state=OPEN draft=true mergedAt=null      ← nothing mutated
+```
+
+**Found on the way:** `withServer`'s stdout-port timeout called a `reject` that was never in scope (`new Promise((resolve) => …)`), so a server that failed to log its port crashed the whole G2 process with `ReferenceError` instead of failing one check — and the timer leaked 15 s after success. Fixed; it fired during this work while running issue #42, which is how it was caught.

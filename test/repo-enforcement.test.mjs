@@ -21,7 +21,19 @@ const toolNames = (o) => (factoryPipeline(o).tools ?? []).map((t) => t.name).sor
 test("default pipeline still offers merge_pr (fixtures are unchanged)", () => {
   assert.ok(toolNames(opts).includes("merge_pr"));
   assert.equal(ORCHESTRATOR_INSTRUCTIONS, orchestratorInstructions());
-  assert.match(ORCHESTRATOR_INSTRUCTIONS, /Call merge_pr with \{"issueNumber": <n>\}/);
+  // #47: the instruction must route through pr_status so the approved sha is read, never invented.
+  assert.match(ORCHESTRATOR_INSTRUCTIONS, /Call pr_status with \{"issueNumber": <n>\}[^\n]*headSha/);
+  assert.match(ORCHESTRATOR_INSTRUCTIONS, /merge_pr with \{"issueNumber": <n>, "headSha": "<that sha>"\}/);
+  assert.match(ORCHESTRATOR_INSTRUCTIONS, /never pass a sha you did not read/);
+});
+
+test("pr_status is available whether or not merging is allowed", () => {
+  // Reading PR state is not destructive; forbidding merges must not remove the ability to check what
+  // a PR's head commit is (that is how a human verifies a draft-only repo's branch).
+  assert.ok(toolNames(opts).includes("pr_status"));
+  assert.ok(toolNames({ ...opts, autoMerge: false }).includes("pr_status"));
+  const draftOnly = orchestratorInstructions({ autoMerge: false });
+  assert.ok(!draftOnly.includes("pr_status"), "a draft-only repo is told to stop at the PR, not to query it for a merge");
 });
 
 test("autoMerge:false removes the tool rather than gating it", () => {
@@ -31,6 +43,7 @@ test("autoMerge:false removes the tool rather than gating it", () => {
   assert.deepEqual(without.filter((n) => ["delegate", "open_draft_pr", "note_lesson"].includes(n)),
     ["delegate", "note_lesson", "open_draft_pr"]);
   assert.deepEqual(without, toolNames(opts).filter((n) => n !== "merge_pr"));
+  assert.ok(without.includes("pr_status"), "read-only state stays available in draft-only repos");
 });
 
 test("the prompt cannot drift from the capability", () => {

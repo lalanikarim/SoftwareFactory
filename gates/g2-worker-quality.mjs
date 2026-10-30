@@ -252,12 +252,16 @@ async function withServer(dir, boot, fn) {
   if (boot.portFrom === "stdout") {
     // The server logs the port it actually bound; wait for that line.
     await Promise.race([
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         const tick = setInterval(() => {
           const m = tail.match(new RegExp(boot.stdoutPattern));
-          if (m) { clearInterval(tick); port = Number(m[1]); resolve(); }
+          // clearTimeout on success: a live 15s timer kept the whole battery process alive after PASS.
+          if (m) { clearInterval(tick); clearTimeout(giveUp); port = Number(m[1]); resolve(); }
         }, 100);
-        setTimeout(() => { clearInterval(tick); reject(new Error(`server did not log a bound port within 15s; output:\n${tail}`)); }, 15_000);
+        const giveUp = setTimeout(() => {
+          clearInterval(tick);
+          reject(new Error(`server did not log a bound port within 15s; output:\n${tail}`));
+        }, 15_000);
       }),
       earlyExit,
     ]);
