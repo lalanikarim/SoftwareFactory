@@ -21,6 +21,7 @@ import { createCoreInstance, loadConfig } from "../vendor/engram/app/src/core.ts
 import { loadFactoryConfig } from "./factory-config.ts";
 import { factoryPipeline, orchestratorInstructions } from "./pipeline.ts";
 import { loadRegistry, requireEnabledRepo, scopeOf } from "./repo-registry.ts";
+import { assertModelAvailable, defaultMismatchWarning } from "./model-catalog.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -136,13 +137,16 @@ async function main() {
   const modelsPath = join(configDir, "models.json");
   const modelsConfig = existsSync(modelsPath) ? JSON.parse(readFileSync(modelsPath, "utf8")) : undefined;
 
+  // Resolve the model ref here (not inline) so readiness can be gated on it below.
+  const modelRef = await resolveModelRef(factoryCfg.models);
+
   const pipelineOpts = {
     workDir: workRoot,
     fixturesRepo: factoryCfg.repo,
     autoMerge: policy.autoMerge,
     pathScope: scopeOf(policy),
     ghToken: process.env.FACTORY_GITHUB_TOKEN ?? factoryCfg.gitToken,
-    modelRef: await resolveModelRef(factoryCfg.models),
+    modelRef,
     image,
     testCommand: factoryCfg.testCommand,
     setupCommand: factoryCfg.setupCommand,
@@ -164,8 +168,31 @@ async function main() {
     modelsConfig,
     extraExtensions: [ext],
     port: 0, // ephemeral; the supervisor records actualPort per instance
-    rootAgent: { instructions: orchestratorInstructions({ autoMerge: policy.autoMerge }), tools: rootTools },
-  }).then((instance) => {
+    // Pin the orchestrator's model explicitly. Without `model`, core.ts falls back to
+    // defaultModelRef() = DEFAULT_MODEL env, else whatever OPENAI_BASE_URL reports as *loaded* —
+    // which resolved independently of the catalog and silently pointed the root agent at a model that
+    // wasn't registered ("unanswered / no_model", 2026-10-30). The repo config's modelId now decides,
+    // for the orchestrator as well as for worker/reviewer tasks.
+    rootAgent: {
+      instructions: orchestratorInstructions({ autoMerge: policy.autoMerge }),
+      tools: rootTools,
+      model: { provider: modelRef.provider, modelId: modelRef.modelId },
+    },
+  }).then(async (instance) => {
+    // Check the model against the catalog THIS instance actually built, before announcing readiness.
+    // Announcing ready and then settling every task as "unanswered / no_model" is what made a config
+    // coupling invisible for a day: the harness waited 25 minutes for an approval that could never
+    // exist. Exiting pre-readiness means spawners fail immediately with the reason in their log.
+    try {
+      const catalog = await assertModelAvailable(modelRef, `http://127.0.0.1:${instance.actualPort}`, process.env.API_TOKEN ?? "");
+      const warn = defaultMismatchWarning(modelRef, catalog);
+      if (warn) console.warn(`[factory] warning: ${warn}`);
+    } catch (e) {
+      console.error(`[factory] fatal: ${(e as Error).message}`);
+      await instance.close().catch(() => {});
+      process.exit(1);
+    }
+
     console.log(`[factory] ${repo} ready on http://127.0.0.1:${instance.actualPort}/ (data: ${dataDir})`);
 
     let keepAlive: NodeJS.Timeout | undefined;

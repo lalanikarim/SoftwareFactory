@@ -398,3 +398,32 @@ state=OPEN draft=true mergedAt=null      ← nothing mutated
 ```
 
 **Found on the way:** `withServer`'s stdout-port timeout called a `reject` that was never in scope (`new Promise((resolve) => …)`), so a server that failed to log its port crashed the whole G2 process with `ReferenceError` instead of failing one check — and the timer leaked 15 s after success. Fixed; it fired during this work while running issue #42, which is how it was caught.
+
+### 5.15 The model is pinned, and boot fails if it isn't runnable (2026-10-30)
+
+While re-running G4 T1 to verify #47, the gate hung: no approval ever appeared. The task had settled instantly and quietly — durable store, `tasks` table:
+
+```
+{"state":{"status":"terminal","outcome":{"status":"failed","error":
+  {"message":"Model aurora/unsloth/gemma-4-12b-it-GGUF is not available","detail":{"reason":"no_model"}}}}}
+```
+
+**Causal chain (three independent resolutions that only worked by coincidence):**
+
+1. `factory/config/*.json` said `modelId: "auto"`, which probes `GET $OPENAI_BASE_URL/models` and takes the model reported as **loaded**.
+2. The kernel builds its catalog from `<agentDir>/models.json` (`PI_AGENT_DIR`, default `~/.pi/agent/models.json`), where this machine declares provider `aurora` with exactly one model: `ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF`. A declared provider **wins** over the env-driven auto-registration (`vendor/engram/app/src/model.ts`: `if (!customIds.has(providerId)) …`), so that single id was the whole catalog for `aurora`.
+3. The root agent inherited `defaultModelRef()` = `DEFAULT_MODEL` env, else the *loaded* model from discovery — and `rootAgent` in `factory/main.ts` never set a model at all.
+
+So the orchestrator ran whatever aurora happened to have loaded. That matched the catalog for weeks; loading gemma-4 on aurora made every task settle `unanswered / no_model`, and because nothing surfaces that state, **G4 waited out its full 25-minute approval timeout** instead of failing. Three fixes:
+
+| Fix | Why it's the right shape |
+|---|---|
+| Repo configs pin an explicit `modelId` (`ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF`) | measurement baselines (81–145K vs 119–220K tokens) are model-specific anyway — a factory that follows the endpoint's loaded model cannot produce comparable numbers. A test now rejects `"auto"` in any `factory/config/*.json` |
+| `rootAgent.model = { provider, modelId }` | without it, core.ts falls back to the default (§chain 3). Note `AgentChange.model` is a `ModelRef` **object**, not the `"<provider>:<id>"` string used by config roles — passing a string produced `Model undefined/undefined is not available` |
+| readiness gated on the catalog (`factory/model-catalog.ts`) | `assertModelAvailable()` fetches the instance's own `GET /models` and exits **before printing "ready"**, so spawners fail immediately with both sides named, instead of announcing readiness and then refusing to generate. `defaultMismatchWarning()` reports a differing instance default rather than letting the next reader rediscover it |
+
+The self-check module is pure except for one fetch (`catalogModelIds` / `isModelAvailable` / `unavailableModelError` / `defaultMismatchWarning` are all table-testable); payload flattening degrades to "not found" on unknown shapes, i.e. fails closed rather than matching something by accident. `test/model-catalog.test.mjs`, 6 checks, includes a tripwire that `main.ts` still passes an explicit `ModelRef` and gates readiness.
+
+**Verified end to end:** after pinning, G4 T1 on fixture-1 issue #42 — `approval-bound-to-commit {headSha: 990bf283…, key: b8ef33e9d80d}` → `head-still-verified` → merged `bc82200e`, exactly one merge commit, landed non-merge sha equal to the verified head, and the merge commit's parents include the approved sha. **GATE G4: PASS in 24s.** That run is also the first evidence for #47's byte-scoped approval *and* closes the last live target on fixture-1 except #45.
+
+**Standing lesson:** an availability question ("can I run this model?") answered by two components independently, with the disagreement surfacing as a terminal task state nobody polls, is invisible until a gate hangs. Check at the boundary where the process can still refuse to start.
