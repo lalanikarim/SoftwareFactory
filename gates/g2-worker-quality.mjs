@@ -40,6 +40,7 @@ import { join } from "node:path";
 import { startIntakeServer } from "../factory/intake.ts";
 import { loadRegistry, requireEnabledRepo, enabledRepos } from "../factory/repo-registry.ts";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath } from "./lib.ts";
+import { totalTokensFor } from "./usage.ts";
 import { loadProbes, probeKeyFromLabels, formatLabels } from "./behavior-probes.mjs";
 
 const pExecFile = promisify(execFile);
@@ -163,9 +164,14 @@ async function runIssue(issueNumber) {
   await instance.close();
 
   const wallSecs = Math.round((Date.now() - t0) / 1000);
-  if (!pr || !pr.isDraft) throw new Error(`no draft PR for ${branch} after ${wallSecs}s`);
-  console.log(`issue #${issueNumber}: draft PR ${pr.url} in ${wallSecs}s`);
-  return { issueNumber, prUrl: pr.url, wallSecs, run: "fresh" };
+  // Phase 6 accounting, read after close from the durable `pi.usage` documents. Wall time alone hides what
+  // actually scales with fleet size: one issue's context is mostly cache reads, and only the store says so.
+  const tokens = totalTokensFor(instance.root);
+  // Include the spend in the failure message: a run that produced nothing still burned context, and that
+  // is exactly the case where "how much did it cost to fail?" matters most.
+  if (!pr || !pr.isDraft) throw new Error(`no draft PR for ${branch} after ${wallSecs}s (${tokens ?? "unmeasured"} tokens)`);
+  console.log(`issue #${issueNumber}: draft PR ${pr.url} in ${wallSecs}s (${tokens ?? "unmeasured"} tokens)`);
+  return { issueNumber, prUrl: pr.url, wallSecs, tokens, run: "fresh" };
 }
 
 // ---------------------------------------------------------------------------
@@ -497,7 +503,7 @@ for (const { issue, probe } of targets) {
         ? `FAIL too many files (${evaln.scope.files.length} > ${evaln.scope.maxFiles})`
         : `FAIL out of scope (${evaln.scope.files.join(", ")})`;
     const behaviorStr = evaln.behavior.ok ? "ok" : `FAIL: ${evaln.behavior.detail}`;
-    console.log(`  issue #${n}: suite=${suiteStr} scope=${scopeStr} behavior=${behaviorStr} zeroEdits=${evaln.zeroEdits} => ${evaln.passed ? "PASS" : "FAIL"}`);
+    console.log(`  issue #${n}: suite=${suiteStr} scope=${scopeStr} behavior=${behaviorStr} zeroEdits=${evaln.zeroEdits} tokens=${run.tokens ?? "unmeasured"} => ${evaln.passed ? "PASS" : "FAIL"}`);
   } catch (e) {
     results.push({ issueNumber: n, passed: false, error: e.message });
     console.log(`  issue #${n}: RUN FAIL — ${e.message}`);
@@ -508,6 +514,13 @@ const passCount = results.filter((r) => r.passed).length;
 const total = targets.length;
 const gate = passCount >= 2 && total === 3 ? "PASS" : passCount >= Math.min(2, total) ? `PASS (${passCount}/${total})` : "FAIL";
 console.log(`\nG2 ${gate} — ${passCount}/${total} issues produced a passing, scoped PR with zero human edits`);
+const tokenRuns = results.map((r) => r.tokens).filter((t) => typeof t === "number");
+if (tokenRuns.length > 0) {
+  const sum = tokenRuns.reduce((a, b) => a + b, 0);
+  console.log(`tokens: ${sum} across ${tokenRuns.length} run(s), mean ${Math.round(sum / tokenRuns.length)} per issue`);
+} else {
+  console.log("tokens: no durable stores were readable, so spend is unmeasured for this run");
+}
 for (const r of results) console.log(`  #${r.issueNumber}: ${r.passed ? "PASS" : `FAIL${r.error ? ` (${r.error})` : ""}`}`);
 
 const { writeFileSync } = await import("node:fs");

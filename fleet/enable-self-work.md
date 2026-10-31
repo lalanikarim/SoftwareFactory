@@ -35,7 +35,12 @@ Create `fleet/fleet.local.json`. Keep the real secret in the environment — the
 
 `allowedSenders` is defense in depth, not decoration: the signature proves GitHub sent the request, the sender allowlist additionally requires that the actor is you. On a published listener both are cheap and they fail differently.
 
-Required environment (`.env` at repo root is read by `factory/main.ts`; export it for the supervisor process too — see the gotcha below): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `FACTORY_GITHUB_TOKEN`, `FACTORY_SANDBOX_IMAGE`, plus `GITHUB_WEBHOOK_SECRET_lalanikarim_drydock`.
+Required environment (`.env` at repo root is read by `factory/main.ts`; export it for the supervisor process too — see the gotcha below): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `GITHUB_WEBHOOK_SECRET_<owner>_<repo>`.
+
+Two more are **optional but should be set explicitly**, because their fallbacks are invisible rather than absent:
+
+- `FACTORY_GITHUB_TOKEN` — when unset, clone and push do not fail; git silently uses the machine's credential helper. Verified on this host: with no token anywhere in the environment, a private repo still cloned, because `/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig` sets `credential.helper=osxkeychain` and that keychain entry is an **account-wide** token. Setting the variable makes the factory's actual credential explicit and lets it be scoped to one repo; leaving it unset means "which token pushed that?" has no answer in config.
+- `FACTORY_SANDBOX_IMAGE` — defaults to `factory-sandbox:latest` (`factory/main.ts`). Fine on a machine where exactly that image is built; name it when the image lives under a registry prefix.
 
 ## 2. Start the supervisor
 

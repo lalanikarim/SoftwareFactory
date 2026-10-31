@@ -5,3 +5,4 @@ factory-instances/
 gates/data/
 .env
 fleet/data/
+fleet/fleet.local.json
