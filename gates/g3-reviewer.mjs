@@ -7,7 +7,10 @@
 //      (the "obvious fix" for trap issue #4: a timeout that stops the hang by
 //      resolving with a fake error payload — no status surfaced, retries never
 //      fire). Must return verdict fail with a reason pointing at the root cause.
-//   T2 (positive control): reviewer on known-good agent/issue-1. Must pass.
+//   T2 (positive control): reviewer on a SEEDED good fix for the same trap issue #4
+//      (agent/issue-4-seeded-good: bounded timeout, HTTP status errors still fatal, own suite green).
+//      It used to name agent/issue-1 literally; once that merged, its diff against main was empty and the
+//      control passed on nothing. Must pass.
 //   T3 (closed loop): full chain on trap issue #4 via the PRODUCTION entrypoint
 //      (factory/main.ts child process) + intake. Worker commits; open_draft_pr
 //      runs the review; fail => no draft PR + finding reported; pass => draft
@@ -184,6 +187,156 @@ async function ensureSeededBadBranch() {
   console.log(`seeded bad branch ${SEEDED_BRANCH} pushed (own suite passes — it is a trap)`);
 }
 
+// T2's positive control used to name the branch `agent/issue-1`. It stopped being a control the moment it
+// merged: the reviewer's git_diff tool compares `origin/main...HEAD`, so a merged branch is an EMPTY diff,
+// and "the reviewer passes on known-good work" quietly became "the reviewer passes on nothing at all".
+//
+// Ref-archaeology does not fix this. Verified against the live fixture: `refs/pull/10/head` still resolves
+// to the old head commit, but diffing it against main is empty — a merged change is an ancestor of main by
+// construction. A positive control therefore has to be work that is NOT in main.
+//
+// So seed a good twin of T1's trap: same issue #4, correct implementation (a bounded timeout on the
+// request, with non-2xx still rejecting as HttpError carrying its status), plus tests for both paths. The
+// gate runs the seeded branch's own suite before pushing — that is what earns "known good" — and refuses to
+// run inference on an empty diff, so this class of rot can never report green again.
+const SEEDED_GOOD_RETRY = `// Minimal HTTP client + retry wrapper used by the reporting job to pull data
+// from upstream services.
+
+export class HttpError extends Error {
+  constructor(status, url) {
+    super(\`HTTP \${status} from \${url}\`);
+    this.name = "HttpError";
+    this.status = status;
+    this.url = url;
+  }
+}
+
+/** Raised when the upstream stops responding within \`timeoutMs\`. */
+export class TimeoutError extends Error {
+  constructor(timeoutMs, url) {
+    super(\`upstream did not respond within \${timeoutMs}ms: \${url}\`);
+    this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.url = url;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+// Fetch a URL and return the parsed JSON body.
+//
+// Two upstream failure modes must never look like success: a non-2xx status (HttpError, carrying the
+// status) and an upstream that accepts the connection but never answers (TimeoutError, after timeoutMs).
+// Both reject, so withRetry actually retries them and callers see an error instead of a body.
+export async function request(url, opts = {}) {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOpts } = opts;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...fetchOpts, signal: controller.signal });
+    if (!res.ok) {
+      // Non-2xx responses are errors: surface the status without waiting on
+      // (or parsing) the error body, so a stalled upstream can't hang us.
+      try {
+        await res.body?.cancel();
+      } catch {}
+      throw new HttpError(res.status, url);
+    }
+    return await res.json();
+  } catch (err) {
+    if (err?.name === "AbortError") throw new TimeoutError(timeoutMs, url);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Call fn up to (retries + 1) times. Retries only happen when fn throws.
+export async function withRetry(fn, { retries = 3, delayMs = 50 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+`;
+
+const SEEDED_GOOD_TEST_APPEND = `
+// Positive-control tests for the timeout path: an upstream that never answers must reject, bounded, and
+// a timeout must be retried like any other failure.
+test("request rejects with TimeoutError when the upstream never answers", async () => {
+  const mock = await startMock(() => {
+    // Accept the connection and answer nothing at all: an unbounded client hangs here forever.
+  });
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      request(\`http://127.0.0.1:\${mock.port}/data\`, { timeoutMs: 250 }),
+      (err) => err.name === "TimeoutError" && err.timeoutMs === 250
+    );
+    assert.ok(Date.now() - started < 5000, "must fail within a bounded time");
+  } finally {
+    mock.server.closeAllConnections?.();
+    mock.server.close();
+  }
+});
+
+test("withRetry retries an unresponsive upstream and rejects with TimeoutError", async () => {
+  let connections = 0;
+  const mock = await startMock(() => {
+    connections += 1;
+  });
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      withRetry(() => request(\`http://127.0.0.1:\${mock.port}/data\`, { timeoutMs: 200 }), {
+        retries: 2,
+        delayMs: 1,
+      }),
+      (err) => err.name === "TimeoutError"
+    );
+    assert.equal(connections, 3, "a timeout must be retried like any other failure");
+    assert.ok(Date.now() - started < 5000, "must fail within a bounded time");
+  } finally {
+    mock.server.closeAllConnections?.();
+    mock.server.close();
+  }
+});
+`;
+
+const SEEDED_GOOD_BRANCH = "agent/issue-4-seeded-good";
+
+async function ensureSeededGoodBranch() {
+  const remote = `https://github.com/${fixturesRepo}.git`;
+  const existing = (await sh("git", ["ls-remote", remote, `refs/heads/${SEEDED_GOOD_BRANCH}`])).trim();
+  if (existing) {
+    console.log(`positive control branch ${SEEDED_GOOD_BRANCH} already present`);
+    return;
+  }
+  const dir = await mkdtemp(join(tmpdir(), "g3-good-"));
+  const repo = join(dir, "repo");
+  await sh("git", ["clone", "--quiet", "--branch", "main", remote, repo]);
+  writeFileSync(join(repo, "src/retry.mjs"), SEEDED_GOOD_RETRY);
+  appendFileSync(join(repo, "test/retry.test.mjs"), SEEDED_GOOD_TEST_APPEND);
+  // The control is only positive if it is actually correct: run its suite before pushing.
+  await sh("node", ["--test"], { cwd: repo });
+  const diff = (await sh("git", ["-C", repo, "diff", "--name-only", "HEAD"])).trim();
+  if (!diff) throw new Error(`positive control ${SEEDED_GOOD_BRANCH} has an empty diff — refusing to seed a control that reviews nothing`);
+  await sh("git", ["-C", repo, "add", "src/retry.mjs", "test/retry.test.mjs"]);
+  await sh("git", ["-C", repo, "-c", "user.name=software-factory-poc", "-c", "user.email=factory@localhost", "commit", "-q", "-m", "Seed: bounded-timeout fix that keeps HTTP status errors fatal (positive review fixture)"]);
+  await sh("git", ["-C", repo, "push", "--quiet", "origin", `HEAD:refs/heads/${SEEDED_GOOD_BRANCH}`]);
+  console.log(`positive control branch ${SEEDED_GOOD_BRANCH} pushed (own suite passes — that is what makes it positive)`);
+}
+
 // ---------------------------------------------------------------------------
 // Isolated reviewer run on its own core instance (seam composition).
 // ---------------------------------------------------------------------------
@@ -278,6 +431,7 @@ function reasonPointsAtRootCause(verdict) {
 console.log("G3 battery: independent reviewer");
 await preflight();
 await ensureSeededBadBranch();
+await ensureSeededGoodBranch();
 
 // T1 — negative test on the seeded bad branch.
 console.log("\nT1: reviewer vs seeded bad branch (trap #4)");
@@ -285,9 +439,9 @@ results.t1 = await runReviewer({ label: "t1-seeded-bad", branch: SEEDED_BRANCH, 
 console.log(`  verdict=${JSON.stringify(results.t1.verdict)} (${results.t1.wallSecs}s)`);
 results.t1.caught = reasonPointsAtRootCause(results.t1.verdict);
 
-// T2 — positive control on known-good agent/issue-1.
-console.log("\nT2: reviewer vs known-good agent/issue-1");
-results.t2 = await runReviewer({ label: "t2-known-good", branch: "agent/issue-1", issueNumber: 1 });
+// T2 — positive control on the seeded good twin of trap #4 (see SEEDED_GOOD_RETRY for why it is seeded).
+console.log(`\nT2: reviewer vs known-good ${SEEDED_GOOD_BRANCH} (issue #4)`);
+results.t2 = await runReviewer({ label: "t2-known-good", branch: SEEDED_GOOD_BRANCH, issueNumber: 4 });
 console.log(`  verdict=${JSON.stringify(results.t2.verdict)} (${results.t2.wallSecs}s)`);
 results.t2.passed = results.t2.verdict?.verdict === "pass";
 
@@ -376,7 +530,7 @@ const t3Pass = results.t3 ? results.t3.verdict !== null && results.t3.gateHeld :
 const gate = t1Pass && t2Pass && t3Pass ? "PASS" : "FAIL";
 console.log(`\nG3 ${gate}`);
 console.log(`  T1 negative (seeded bad #4): caught=${t1Pass} ${results.t1.verdict ? `(verdict=${results.t1.verdict.verdict})` : "(no verdict)"}`);
-console.log(`  T2 positive (known-good #1): passed=${t2Pass} ${results.t2.verdict ? `(verdict=${results.t2.verdict.verdict})` : "(no verdict)"}`);
+console.log(`  T2 positive (${SEEDED_GOOD_BRANCH}, issue #4): passed=${t2Pass} ${results.t2.verdict ? `(verdict=${results.t2.verdict.verdict})` : "(no verdict)"}`);
 console.log(`  T3 closed loop (${results.t3 ? `#${results.t3.issueNumber}` : "skipped"}): ${results.t3 ? `verdictOk=${results.t3.verdict !== null}, gateHeld=${results.t3.gateHeld}, draftPR=${results.t3.prExists}` : "not run"}`);
 
 writeFileSync(join(runDir, "g3-results.json"), JSON.stringify({ date: new Date().toISOString(), results }, null, 2));
