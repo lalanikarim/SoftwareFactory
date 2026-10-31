@@ -1,0 +1,173 @@
+# Decision log
+
+Dated record of decisions taken on `lalanikarim/drydock`, one entry per decision: what was decided, why, and what it unblocks or costs. IDs trace back to `decision-questionnaire-2026-10-31.html`; superseded choices are named so a future reader can see what changed.
+
+Statuses: **adopted** · **adopted-with-risk** · **interpretation** (my reading of an answer, correct it cheaply) · **open** (still needs input).
+
+---
+
+## 2026-10-31 — deployment & transport
+
+### A1 — Transport: Tailscale Funnel in front of the supervisor host · **adopted-with-risk**
+
+GitHub reaches `127.0.0.1:9700` through a Funnel HTTPS URL. Requirements any front must satisfy stay documented in `fleet/enable-self-work.md` §3 (TLS, byte-for-byte body forwarding, no buffering ahead of GitHub payloads, 4xx passthrough) — the factory itself remains transport-agnostic.
+
+Funnel was already proven end to end here (`/health` reached publicly, then torn down). Risk: a revocable public URL on a laptop; see A2 and R3. Supersedes "stay local / POST /tasks only".
+
+### A2 — Supervisor runs on this laptop · **adopted-with-risk**
+
+Accepted for the next stretch. Consequences accepted explicitly: sleep and IP churn affect a published listener, restart discipline is manual until #69 lands, and credentials live in a user keychain rather than a service context. Any move to an always-on host should re-derive this entry rather than inherit it.
+
+### A3 — Fix #69 before publishing · **adopted**
+
+The stale-routes defect is the one bug that can make a correctly-signed delivery be refused as unknown-repo while the listener reports healthy. Publishing after it lands removes the "restart and read the adapter's startup line" ritual from the critical path. #61/#62 are not prerequisites for publishing (they matter regardless — see C1/C2).
+
+### A4 — Webhook secret stays in `.env` · **adopted**
+
+Single-operator host; `fleet/fleet.local.json` and `.env` are gitignored. Revisit if the host becomes shared or always-on-public.
+
+---
+
+## 2026-10-31 — identity & credentials
+
+### B1 — One fine-grained PAT scoped to exactly the managed repos · **adopted**
+
+One secret, explicit repo list, no org-wide write. Scopes needed by the current flow: `contents:write`, `pull_requests:write`, `issues:read`. Supersedes "account-wide via gh keychain" (which is what actually runs today, per #70).
+
+### B2 — Missing factory token: start, but log the credential path loudly · **adopted**
+
+Boot must state which credential path it resolved (`FACTORY_GITHUB_TOKEN` set vs host credential helper) and that an unset variable means account-wide. Never silent, never fatal — local work stays friction-free. Implements #70.
+
+### B3 — PRs should be authored by a GitHub App · **adopted (later in sequence)**
+
+Answers #68 properly: PRs appear as the app, reviewable before merge by a human, with an identity distinct from the operator's. Sequenced after B1 rather than instead of it: the scoped PAT unblocks everything now and does not need rotation tooling that the App would replace. Migration path is recorded so nobody builds PAT automation twice.
+
+### I2 — interpretation: PAT now, App later · **interpretation**
+
+B1 and B3 could read as contradictory. Reading: PAT = today's credential with a bounded blast radius; App = identity for authorship, delivered as D1 item 3. Correct me if the intent was "wait for the App".
+
+---
+
+## 2026-10-31 — verification strategy (this is the load-bearing change)
+
+### C1 — `open_draft_pr` runs the repo's test command and refuses to push on non-zero · **adopted**
+
+Strongest option chosen: no PR without a passing verification run, exit code attached as evidence. Directly prevents the §5.16 failure (a PR body asserting "tests pass" over a crashing `npm test`).
+
+### C2 — No GitHub Actions. All tests local only. · **adopted-with-risk**
+
+Budget decision; recorded verbatim: *"No github actions. we don't have the budget. all tests local only."* The selected sub-option (`submodule_pin`) survives as a **local** check — verify the `vendor/engram` pin resolves and builds — not a workflow. #62 should be closed as won't-do and replaced by the local verification gate.
+
+Factual note, not an argument: `lalanikarim/drydock` is a **public** repo, where GitHub provides unlimited Linux-hosted Actions minutes (private repos get 2,000/month; both fixtures are private). If "no budget" refers to runner cost specifically, that constraint may not apply to drydock itself. Either way the decision stands as recorded — local-only also keeps the mutating gates out of any automated path by construction.
+
+### I3 — interpretation: #61 becomes the gate that CI would have been · **interpretation**
+
+With C2 (no CI) and E3 (0 required approving reviews), `open_draft_pr`'s verification evidence is the only automatic control before a human clicks merge. That makes C1 mandatory rather than nice-to-have, and it means a repo without a test command cannot produce PRs at all unless we add an explicit escape hatch per repo config.
+
+### R1 — risk: no CI + zero required reviews · **open**
+
+Accepted posture for a single-operator repo. Mitigations in force: capability removal (`autoMerge:false` → `merge_pr` absent), path scope with `gates/` outside the allowlist, byte-scoped merge approvals (#47), and C1 evidence-on-push. What is *not* mitigated: nothing external re-runs tests after a draft PR exists.
+
+---
+
+## 2026-10-31 — code approach decisions
+
+### C3 — #69: write routes before spawning; verify hash per request; exit loudly on drift · **adopted**
+
+No silent hot-reload. A policy change becomes effective through an explicit restart, which keeps "policy reviews like code" true and makes the failure mode a dead listener instead of a healthy-looking one with stale authority.
+
+### C4 — §3.9 T1: preserve the branch, mark resumable, requeue once with the diff as context · **adopted**
+
+Priced by measurement, not intuition: §5.17 showed rework cost 43% more than the first attempt (467K vs 326K tokens, 18 worker generations vs 12) because context has to be rebuilt from the branch. Resume beats restart on cost as well as on waste.
+
+### C5 — Full gate battery before each kernel pin bump or major posture change · **adopted**
+
+Matches actual usage (N2 was run exactly that way). G0 + unit suite stay per-merge; no scheduled full battery while the supervisor host is a laptop.
+
+---
+
+## 2026-10-31 — roadmap
+
+### D1 — Next builds, in order: #67 PR-comment feedback loop → #65 issue triage/expansion → #68 GitHub App · **adopted**
+
+Notable that all three ranked items are new capability rather than the open defect list; reconciled in I1.
+
+### I1 — interpretation: in-flight correctness first, then the ranked features · **interpretation**
+
+D1 ranks three capabilities while A3 gates deployment on #69 and C1 was chosen as the CI substitute. Combined with G3 ("wrap up all in-flight work as soon as possible and get this ready for production"), the queue runs: #69 → #70 → PAT → #61 → E1 allowlist → publish, then D1's ranked list. Correct me if the intent was to start #67 immediately instead.
+
+### D2 — Target 2 (#42): design document only, no build · **adopted**
+
+Its stated N3 gate is met (drydock shipped self-work PR #59), so waiting is no longer justified by the gate — but capacity is. A written design/decision doc keeps the option open without displacing Target 1's gaps.
+
+### D3 — Run fixture-1 #45 as the post-change confirmation · **adopted**
+
+Exercises G2/G4 with everything merged since N2 applied. Costs ~10 min of aurora inference and produces one draft PR for a human merge. After it, both fixtures hold green oracles with no live targets — revisit their role (regression-only vs re-seeding) at that point.
+
+### D4 — #41: send the upstream PR against engram ourselves · **adopted**
+
+Two narrowings in the v0.2.0 destructive guard (interpreter-head matching, `/dev` redirection drop; tracked upstream as engram#63). We own the fix conversation instead of waiting on a release. No pin change until it lands and passes the battery.
+
+---
+
+## 2026-10-31 — safety posture revisions
+
+### E1 — Add root-level docs to drydock's self-work allowlist · **adopted-with-risk**
+
+`pathAllowlist` gains `README.md` and `AGENTS.md` (existing: `factory/`, `fleet/`, `test/`, `research/`). `gates/` stays out; `gates/probes/` stays in `protectedPaths`; `vendor/` remains unconditionally protected.
+
+Risk recorded: **`AGENTS.md` is the file that constrains the factory.** Letting self-work edit it means a change to its own operating rules can arrive as an ordinary PR — reviewable, but reviewable-by-one-click by the same person who merged everything else. Suggested tightening (not yet applied, say the word): keep `README.md` writable and add `AGENTS.md` to `protectedPaths`.
+
+### E2 — `autoMerge` is never true, anywhere · **adopted**
+
+Human merges, always. Consistent with capability removal being the enforcement mechanism: there is no repo config in which a destructive tool should appear in the worker's tool list.
+
+### E3 — Keep 0 required approving reviews on `main`, revisit after the App lands · **adopted-with-risk**
+
+Recorded verbatim: *"This can be revisited once Github App integration is completed."* Coherent pairing — bot-authored PRs plus one human approval is a meaningful control; "approve your own PR as a second human" mostly adds latency. Until then see R1.
+
+### E4 — Token budgets: warn and annotate, never abort · **adopted**
+
+Collect a distribution before enforcing. Baselines exist now (§5.17: 160K–467K tokens per task, 78–88% cache reads), so an eventual ceiling can be set from data instead of guesses — and M4's lesson (a budget below task duration looks like a failure) is still true.
+
+---
+
+## 2026-10-31 — housekeeping & records
+
+### F1 — Delete merged local branches · **adopted**
+
+`chore/self-run-rework-detection` and `chore/self-work-enablement-runbook` removed (safe delete, both merged). `feature/drydock-self-manageable` (POC era) was not selected for deletion and stays.
+
+### F2 — Decisions live in this file · **adopted**
+
+One entry per decision with date and status, greppable by topic. Supersedes continuing the plan's §5.x prose for decisions; `research/multi-repo-factory-plan.md` keeps narrative/measurement/evidence sections and points here.
+
+### F3 — md → html regeneration stays manual · **adopted**
+
+Accepted drift risk on request-driven regeneration only. Accepted exception: `decision-questionnaire-2026-10-31.html` is a tool with no markdown source, so the "md is source of truth" rule does not apply to it.
+
+---
+
+## Open questions (not answered in the questionnaire)
+
+### G2 — What am I most uneasy about in the current design? · **open**
+
+Asked and left blank. It stays on the list; unspoken unease has a way of becoming the thing that breaks.
+
+### G3 — "This is working" in a month: *wrap up all in-flight work ASAP, get this ready for production* · **adopted as the north star**
+
+Concrete enough to check against `research/work-queue.md`: every in-flight item closed, listener published and smoke-tested, credential scoped.
+
+### G4 — Anything else / corrections to premises · **open**
+
+---
+
+## Risk register (cross-cutting)
+
+| # | Risk | In force because | Mitigation / trigger to revisit |
+|---|---|---|---|
+| R1 | No CI and 0 required approving reviews: nothing external re-runs tests after a draft PR exists | C2 + E3 | C1 makes `open_draft_pr` run the suite and refuse on non-zero; revisit when #68 lands |
+| R2 | Self-work can edit `AGENTS.md`, the file that constrains it | E1 | Recommend moving it to `protectedPaths`; human merge is currently the only control |
+| R3 | Public listener (Funnel) on a laptop holding an account-wide credential | A1 + A2, credential status today | B1 PAT is a **prerequisite** for publishing, not a follow-up; funnel URL is revocable; `allowedSenders` stays on |
+| R4 | Stale policy accepted between fleet change and restart | #69 open | C3 removes it; until then the runbook's restart-and-read-the-startup-line step is mandatory |
+| R5 | Re-verification of a draft PR after rework relies on the same worker-run command | C1 without CI | Byte-scoped approval (#47) means an approval names a commit, but nothing re-tests that commit independently |
