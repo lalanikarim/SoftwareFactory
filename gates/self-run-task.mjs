@@ -40,13 +40,28 @@ const gh = (args) =>
   execFileSync("gh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
 
 const branch = `agent/issue-${issueNumber}`;
+// The head sha of the branch right now, or null when it does not exist yet. This is what makes rework
+// runs observable: a re-push lands NEW commits on the SAME branch (the pipeline force-with-leases a
+// diverged prior attempt rather than deleting it, because deleting closes the PR), so "a PR exists for
+// the branch" is already true before the run starts and proves nothing. Waiting for the head to CHANGE
+// is the only signal that distinguishes this attempt from the previous one — the first version of this
+// runner matched on PR existence and returned in under a second, then closed the instance mid-run.
+const branchHead = () => {
+  try {
+    return gh(["api", `repos/${repo}/git/ref/heads/${branch}`, "--jq", ".object.sha"]) || null;
+  } catch {
+    return null; // branch not created yet
+  }
+};
+const baselineHead = branchHead();
 const existing = JSON.parse(
   gh(["pr", "list", "--repo", repo, "--state", "all", "--head", branch, "--json", "number,state,isDraft,url"]),
 );
 if (existing.length > 0 && !allowExisting) {
-  console.error(`branch ${branch} already has PR ${existing[0].url} — close it or pass --allow-existing`);
+  console.error(`branch ${branch} already has PR ${existing[0].url} — close it, or pass --allow-existing to run a rework that replaces its head`);
   process.exit(2);
 }
+if (baselineHead) console.log(`[self-run] baseline head of ${branch} = ${baselineHead.slice(0, 12)}; waiting for a different sha`);
 
 const issue = JSON.parse(
   gh(["issue", "view", String(issueNumber), "--repo", repo, "--json", "number,title,body,labels"]),
@@ -78,15 +93,17 @@ try {
 
   const deadline = Date.now() + timeoutMin * 60_000;
   while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20_000));
     const found = JSON.parse(
       gh(["pr", "list", "--repo", repo, "--state", "all", "--head", branch, "--json", "number,state,isDraft,url"]),
     );
-    if (found.length > 0) {
-      console.log(`[self-run] PR ${found[0].url} (state=${found[0].state}, draft=${found[0].isDraft})`);
+    const head = branchHead();
+    if (found.length > 0 && head && head !== baselineHead) {
+      const how = baselineHead ? `head replaced ${baselineHead.slice(0, 12)} → ${head.slice(0, 12)}` : `new branch at ${head.slice(0, 12)}`;
+      console.log(`[self-run] PR ${found[0].url} (state=${found[0].state}, draft=${found[0].isDraft}) — ${how}`);
       process.exitCode = 0;
       break;
     }
-    await new Promise((r) => setTimeout(r, 20_000));
   }
 
   if (process.exitCode === undefined) {
