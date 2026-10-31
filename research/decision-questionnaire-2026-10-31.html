@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>drydock — decision questionnaire (2026-10-31)</title>
+<style>
+  /* Self-contained: no external CSS/JS/fonts/images. Renders offline and in print. */
+  :root {
+    --bg: #fbfaf8; --card: #ffffff; --ink: #1c1a17; --muted: #6b6560;
+    --line: #e2ded8; --accent: #9a3412; --accent-soft: #fff7ed; --ok: #14532d; --warn: #92400e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header { border-bottom: 3px solid var(--ink); background: var(--card); padding: 28px 24px 20px; }
+  main { max-width: 940px; margin: 0 auto; padding: 0 24px 120px; }
+  h1 { margin: 0 0 6px; font-size: 27px; letter-spacing: -0.4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .lede { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 14px 16px; margin: 22px 0; font-size: 15px; }
+  .lede code { background: #ffedd5; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+  section { margin-top: 38px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--accent); margin: 0 0 4px; }
+  .sec-note { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  q { display: block; }
+  .q { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; margin-bottom: 16px; }
+  .q.answered { border-left: 4px solid var(--ok); }
+  .q.blocking-answer { border-left: 4px solid var(--accent); }
+  .q-head { display: flex; gap: 10px; align-items: baseline; }
+  .qid { font: 600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); flex: none; }
+  .q h3 { margin: 0; font-size: 17px; line-height: 1.4; }
+  .why { color: var(--muted); font-size: 14.5px; margin: 8px 0 0; }
+  details.ctx { margin: 10px 0 0; font-size: 13.5px; }
+  details.ctx summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+  details.ctx pre, .opt-context code { white-space: pre-wrap; }
+  details.ctx p { margin: 8px 0; }
+  .opts { list-style: none; padding: 0; margin: 14px 0 0; }
+  .opts li { margin-bottom: 9px; }
+  .opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid transparent; border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+  .opt:hover { background: #f6f4f1; }
+  .opt input { margin: 4px 0 0; flex: none; }
+  .opt .t { font-size: 15px; }
+  .opt .impl { color: var(--muted); font-size: 13.5px; display: block; margin-top: 2px; }
+  .tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.8px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: 1px; }
+  .tag.rec { color: var(--ok); border-color: #bbf7d0; background: #f0fdf4; }
+  .tag.block { color: var(--warn); border-color: #fed7aa; background: #fffbeb; }
+  textarea { width: 100%; margin-top: 10px; padding: 10px 12px; font: inherit; font-size: 14.5px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; background: #fffdfb; }
+  textarea:focus, input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .other { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .other input[type=text] { flex: 1; padding: 8px 10px; font: inherit; font-size: 14.5px; border: 1px solid var(--line); border-radius: 6px; }
+  .bar { position: sticky; bottom: 0; background: var(--card); border-top: 2px solid var(--ink); padding: 12px 24px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; z-index: 5; }
+  .bar .count { font-size: 13.5px; color: var(--muted); margin-right: auto; }
+  button { font: inherit; font-size: 14px; padding: 9px 15px; border-radius: 6px; border: 1px solid var(--ink); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--ink); color: #fff; }
+  button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #out { width: 100%; min-height: 240px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 12px; }
+  .missing { color: var(--warn); font-size: 13.5px; margin-top: 8px; }
+  footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding: 18px 0 40px; margin-top: 40px; }
+  @media print { .bar, details.ctx { display: none; } .q { break-inside: avoid; } body { background: #fff; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>drydock — decision questionnaire</h1>
+  <p class="sub">Compiled 2026-10-31 · source: plan §5.18 pending register, open issues #41 #42 #61 #62 #64 #65 #67 #68 #69 #70, and operator-only decisions · repo <code>lalanikarim/drydock</code></p>
+</header>
+
+<main>
+  <div class="lede">
+    <strong>How to use this.</strong> Every question is answerable from what exists on <code>main</code> today — nothing here asks you to predict. Choices marked <span class="tag rec">recommended</span> are my recommendation with the reasoning in the option text; disagreeing is fine and often cheaper than agreeing. Answers autosave in this browser (localStorage), so closing the tab loses nothing. When done: <em>Copy to clipboard</em> (or <em>Download .json</em>) → paste it back to me. Markdown output is also available for issues and PR bodies. Partial exports are fine — unanswered questions travel as <code>null</code> and stay queued.
+  </div>
+
+  <section id="questions"></section>
+
+  <section>
+    <h2>Export</h2>
+    <p class="sec-note">Both buttons produce the same payload. The JSON is what I parse; the Markdown is for humans and pastes into an issue or PR body.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="primary" id="btn-json">Generate JSON</button>
+      <button id="btn-md">Generate Markdown</button>
+      <button id="btn-dl">Download .json</button>
+      <button id="btn-copy">Copy to clipboard</button>
+      <button id="btn-clear">Clear all answers</button>
+    </div>
+    <textarea id="out" readonly spellcheck="false" placeholder="output appears here"></textarea>
+    <p class="missing" id="missing"></p>
+  </section>
+
+  <footer>
+    Answers are recorded as decisions with dates, in the same style as the rest of the plan: what was decided, why, and what it unblocks. Nothing is transmitted anywhere — this file has no network calls.
+  </footer>
+</main>
+
+<div class="bar">
+  <span class="count" id="count">0 of 0 answered</span>
+  <button class="accent" id="btn-jump">Next unanswered</button>
+  <button class="primary" id="btn-json-2">Export JSON</button>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// The question set. Each entry renders itself; `id` is the key in the export, so
+// changing one is a breaking change for any previously exported answer file.
+// ---------------------------------------------------------------------------
+const BLOCKING = "blocking"; // needs you before work can proceed
+
+const DATA = [
+  {
+    section: "A · Getting webhook-driven self-work running",
+    note: "Everything on main is verified for this; what is missing is a transport choice and the sequencing call. This is the only cluster where nothing I write can substitute for your decision.",
+    items: [
+      {
+        id: "A1_transport", blocking: true,
+        q: "How should GitHub reach the intake listener (it binds 127.0.0.1 and knows nothing about transport)?",
+        why: "The factory is transport-agnostic on purpose; the runbook lists requirements any front must satisfy: TLS, byte-for-byte body forwarding, no buffering in front of GitHub payloads, 4xx passed through unchanged. This decides where the public attack surface lives.",
+        ctx: "Verified earlier this month: Tailscale Funnel reached /health publicly and was torn down (`tailscale funnel reset`, port 9700 closed). Requirements are in fleet/enable-self-work.md §3.",
+        type: "single", options: [
+          { v: "funnel", label: "Tailscale Funnel in front of the supervisor host", impl: "Fastest, already proven here. Public HTTPS URL you can revoke. Adds a dependency on tailscale being up." },
+          { v: "cloudflared", label: "cloudflared tunnel to a named hostname", impl: "Named hostname + WAF/rate limiting available. New binary and a second account boundary.", tag: BLOCKING },
+          { v: "vps_proxy", label: "Reverse proxy (caddy/nginx) on an existing public host", impl: "You own the TLS termination and the logs; more to configure, least new trust introduced." },
+          { v: "norelay", label: "Stay local: dispatch with POST /tasks only, no webhook", impl: "Zero new attack surface. Self-work stays manual-trigger (what gates/self-run-task.mjs does today). Everything else in this questionnaire still applies." },
+          { v: "other", label: "Other / describe", impl: "", other: true }
+        ]
+      },
+      {
+        id: "A2_host", blocking: true,
+        q: "Which machine runs the supervisor long-term?",
+        why: "Today it is this laptop (karims-macbook-air-2), which you have called temporary. The answer changes credential advice (a laptop keychain vs a service credential) and what 'restart the supervisor' means operationally.",
+        ctx: "Known defect #69: the adapter reads routes at process start, so a fleet/registry change needs a restart until fixed. That makes 'who restarts it, how often' part of the hosting decision.",
+        type: "single", options: [
+          { v: "laptop", label: "This laptop, accept the consequences", impl: "Fine while dispatch is manual. Becomes bad as soon as a webhook points at it (sleep, IP churn, account-wide credentials)." },
+          { v: "spark", label: "A dedicated always-on host (e.g. spark.infinidigm)", impl: "Matches how aurora/unsloth are already run. Needs the sandbox image + node 22 there." },
+          { v: "container_vm", label: "Container/VM purpose-built for the fleet", impl: "Cleanest blast radius; also forces the credential question to be answered properly instead of inherited." },
+          { v: "later", label: "Decide later — keep local dispatch until then", impl: "Consistent with A1 = 'stay local'." }
+        ]
+      },
+      {
+        id: "A3_sequence", blocking: true,
+        q: "Publish the listener now, or after #69/#61/#62 land?",
+        why: "The listener's own hardening (#61 verification evidence, #62 CI) and the stale-routes bug (#69) are all open. Publishing first means running with restart discipline documented in the runbook; waiting means self-work stays manual-trigger a while longer.",
+        ctx: "#69 is small and structural (write routes before spawning; detect drift per request; reload-or-exit-loudly). #61/#62 are independently valuable regardless of transport.",
+        type: "single", options: [
+          { v: "fix_first", label: "Fix #69 first, then publish", impl: "Recommended: #69 is the one defect that can make a correctly-signed delivery get refused for reasons nothing reports.", tag: "rec" },
+          { v: "harden_first", label: "Land #61 + #62 too, then publish", impl: "Slowest, most defensible. Also gives CI its first real reason to exist." },
+          { v: "publish_now", label: "Publish now with restart discipline documented", impl: "Fastest path to end-to-end webhook self-work; accepts a known stale-policy window." },
+          { v: "never", label: "Don't publish at all this cycle", impl: "Pairs with A1 = stay local." }
+        ]
+      },
+      {
+        id: "A4_secret", q: "Where does the webhook secret live?",
+        why: "Currently .env at repo root (gitignored, and now explicitly ignoring fleet/fleet.local.json). A file next to the code is convenient; it is also readable by anything running as you.",
+        type: "single", options: [
+          { v: "env_file", label: ".env file (status quo)", impl: "Simple, works with the supervisor's env override. Accepted risk on a single-user host." },
+          { v: "keychain", label: "OS keychain / service credential read at start", impl: "Better; small amount of new startup code." },
+          { v: "secret_manager", label: "Secret manager (out of scope for now)", impl: "Right answer for a fleet, heavy for one repo." }
+        ]
+      }
+    ]
+  },
+  {
+    section: "B · Identity and credentials",
+    note: "#68 and #70 are the same underlying question seen from two sides: who is the factory when it acts, and how does it prove it. Answering these changes code, so they are worth being decisive about.",
+    items: [
+      {
+        id: "B1_token_scope", blocking: true,
+        q: "What credential should the factory run with?",
+        why: "Today: an account-wide token (via gh keychain). The plan's §3.5 recommends scoping before any public exposure; #70 documents that unset FACTORY_GITHUB_TOKEN silently falls back to that keychain entry.",
+        ctx: "Verified 2026-10-31: with no token in the environment, a private repo still clones — /Library/Developer/CommandLineTools/usr/share/git-core/gitconfig sets credential.helper=osxkeychain.",
+        type: "single", options: [
+          { v: "per_repo_pat", label: "One fine-grained PAT per managed repo", impl: "Smallest blast radius; N secrets to rotate. contents:write + pull_requests:write + issues:read covers the current flow." },
+          { v: "one_pat_managed", label: "One PAT scoped to exactly the managed repos", impl: "Recommended balance: one secret, explicit repo list, no org-wide write.", tag: "rec" },
+          { v: "gh_app", label: "GitHub App installation (also answers #68)", impl: "Correct long-term identity for 'the agent did this', per-repo install, short-lived tokens. Most setup of the four." },
+          { v: "keep_account", label: "Keep account-wide for now", impl: "Only defensible while A1 = no public listener. Should be paired with #70's loud failure so it can't drift unnoticed." }
+        ]
+      },
+      {
+        id: "B2_fallback_behavior", blocking: true,
+        q: "#70: when no factory token is configured, what should boot do?",
+        why: "Right now it works by accident, which means 'which credential pushed that?' has no answer in config. This is a policy question about failing closed vs failing conveniently.",
+        type: "single", options: [
+          { v: "refuse", label: "Refuse to start unless a token or an explicit opt-in is set", impl: "Fails closed; breaks the current zero-config laptop workflow until you set it." },
+          { v: "warn_loudly", label: "Start, but log the credential path and say it is account-wide", impl: "Recommended: keeps local work friction-free while making the fallback impossible to miss in logs.", tag: "rec" },
+          { v: "as_is", label: "Leave as-is; documentation is enough", impl: "Cheapest. Accepts that a future host behaves differently and nothing says so." }
+        ]
+      },
+      {
+        id: "B3_author_identity", q: "#68: who should PRs appear to come from?",
+        why: "PRs currently look like they came from you, which makes 'did I write this?' unanswerable from the PR alone and weakens the human-gate story.",
+        ctx: "Options that keep your account as author can still be labeled (draft prefix, bot-style trailer, distinct commit author email). A GitHub App or machine user is a real identity change.",
+        type: "single", options: [
+          { v: "as_is_label", label: "Keep my authorship, mark it clearly (title/body/commit trailer)", impl: "15 minutes of work, no new credentials. Good enough for one-repo self-work." },
+          { v: "machine_user", label: "Dedicated machine user account", impl: "Honest identity; needs a second account and its own token; fine-grained PATs per account." },
+          { v: "app", label: "GitHub App (does #68 properly)", impl: "PRs authored by drydock[bot]; review-before-merge story matches your issue text. Budget the setup time." },
+          { v: "defer", label: "Defer — cosmetic relative to what's open" }
+        ]
+      }
+    ]
+  },
+  {
+    section: "C · Open code work: pick approach, not whether",
+    note: "Each of these is well-understood enough that only the design choice is missing. Answering lets me implement without further questions.",
+    items: [
+      {
+        id: "C1_evidence_61", q: "#61: what should open_draft_pr require before it pushes?",
+        why: "Demonstrated harmful in §5.16: attempt 1 asserted 'tests pass' in the PR body while npm test exited non-zero. The pipeline had no way to know, because nothing ran the command and recorded the result.",
+        ctx: "Constraint worth knowing: the worker's own sandbox is sealed; verification could run host-side (as G2 does) or in a one-shot networked container like setup does.",
+        type: "multi", options: [
+          { v: "run_and_require", label: "Run the repo's test command, attach exit code, refuse to push on non-zero", impl: "Strongest. Means a broken suite can't produce a PR at all — including when the tests themselves are wrong.", tag: "rec" },
+          { v: "run_and_attach", label: "Run it and attach evidence, but allow push with a visible failure", impl: "Lets a human see a red run attached to a draft; keeps 'draft is not a claim of correctness'." },
+          { v: "sandbox_verify", label: "Verification must run in the one-shot container, not on the host", impl: "Consistent with §3.6 (host-side execution is the thing D1 called out as unsafe)." },
+          { v: "prose_only", label: "Keep prose; rely on review", impl: "No new code. Accepts a repeat of the §5.16 failure mode." }
+        ]
+      },
+      {
+        id: "C2_ci_62", q: "#62: what should CI cover, and when does it block?",
+        why: "Nothing runs npm test automatically today (gh pr checks shows only GitGuardian). It is also the missing half of #61: CI catches what a worker's own claim cannot.",
+        ctx: "Must handle the vendored submodule recursively; gates that mutate repos (G1/G4, fixture merges) must stay out of CI.",
+        type: "multi", options: [
+          { v: "push_pr", label: "GitHub Actions on push + PR: npm ci && npm test (+ test:boot)", impl: "The baseline. Cheap; runs the 15-file unit suite." },
+          { v: "require_merge", label: "Make it a required status check before merge", impl: "Turns CI into an actual gate rather than a report. Combined with 0 required approving reviews this is the strongest automatic control available." , tag: "rec" },
+          { v: "submodule_pin", label: "Also verify the vendor/engram pin resolves and its suite builds", impl: "Catches pin drift, which is Phase 4's whole point." },
+          { v: "no_gates", label: "Explicitly exclude inference/mutating gates from CI", impl: "Should be a stated decision so nobody 'helpfully' adds G4 to the workflow later.", tag: "rec" }
+        ]
+      },
+      {
+        id: "C3_stale_routes_69", q: "#69: how should route staleness be handled?",
+        why: "Observed live: the adapter logged fixture routes while the on-disk fleet file listed only drydock — a correctly signed drydock delivery would have been refused as unknown-repo while the listener reported healthy.",
+        type: "single", options: [
+          { v: "write_then_drift_exit", label: "Write routes before spawning; verify hash per request; exit loudly on drift", impl: "Recommended: no silent reload, no stale acceptance — a restart is an explicit act.", tag: "rec" },
+          { v: "hot_reload", label: "Hot-reload routes when the file changes (mtime/hash)", impl: "Operator-friendly; makes policy edits live without review, which cuts against 'policy reviews like code'." },
+          { v: "both_tiered", label: "Hot-reload non-destructive fields, exit for anything that widens authority", impl: "Most precise, most code. autoMerge/eligibilityLabel/token changes force a restart; comments don't." }
+        ]
+      },
+      {
+        id: "C4_recovery_39", q: "§3.9 T1 partial-run recovery: what should an aborted run do?",
+        why: "Parked until the migration finished, and the migration is now closed (#30). Today a wall-clock abort is a clean terminal failure and any partial work dies with the workspace.",
+        type: "single", options: [
+          { v: "keep_and_requeue", label: "Preserve the branch, mark the task resumable, requeue once with the diff as context", impl: "Recommended shape; note §5.17's measurement — rework cost 43% more than the first attempt, so resume beats restart." , tag: "rec" },
+          { v: "keep_only", label: "Preserve partial work and stop (human decides)", impl: "Minimal, safest, no new automation." },
+          { v: "design_doc", label: "Design note only this cycle", impl: "Keeps it in the register without committing implementation time." },
+          { v: "drop", label: "Drop it — budgets are rare enough to ignore" }
+        ]
+      },
+      {
+        id: "C5_gate_cadence", q: "How often should the full gate battery (G0–G5, M1/M2/M4) run?",
+        why: "The last full nine-gate confirmation was N2 on 2596e9e; since then we've merged ~15 PRs with partial batteries. Full runs cost GPU minutes and mutate fixture repos.",
+        type: "single", options: [
+          { v: "per_release", label: "Full battery before each kernel pin bump or major posture change", impl: "Matches how it has actually been used." },
+          { v: "weekly", label: "Weekly scheduled full run + G0/unit on every merge", impl: "Catches drift between pin bumps; needs a host (A2) and CI (#62)." },
+          { v: "on_demand", label: "On demand only, when I ask", impl: "Cheapest; risk is discovering regressions late." }
+        ]
+      }
+    ]
+  },
+  {
+    section: "D · Roadmap and priorities",
+    note: "These decide what gets built after the open code work. Ranking matters more than perfection here — I'll take the order literally.",
+    items: [
+      {
+        id: "D1_rank_next", blocking: true,
+        q: "Rank what to build next (pick up to 3; order = priority).",
+        why: "Everything below is real and none of it is started. This is the queue.",
+        type: "multi", max: 3, options: [
+          { v: "ci_62", label: "#62 CI job", impl: "Unblocks honest merging; prerequisite for #61 being enforceable." },
+          { v: "evidence_61", label: "#61 verification evidence in open_draft_pr", impl: "Directly prevents the §5.16 failure mode." },
+          { v: "routes_69", label: "#69 stale routes fix", impl: "Required before a published listener is trustworthy." },
+          { v: "cred_70", label: "#70 credential posture (explicit token, loud fallback)", impl: "Cheap, and it's the difference between 'the factory has a credential' and 'we know which one'." },
+          { v: "pr_feedback_67", label: "#67 PR-comment feedback loop (rebase / conflict resolve / free-form instructions)", impl: "Formalizes what we did manually in §5.16's rework; most self-work is rework." },
+          { v: "issue_triage_65", label: "#65 issue triage/expansion label (research + refine before action)", impl: "Improves input quality upstream of the worker — probably the highest-leverage quality change available." },
+          { v: "telegram_64", label: "#64 Telegram notification with approve/merge/reject UX", impl: "Makes the human gate mobile. Note: a merge button needs the byte-scoped approval path (#47), not a shortcut around it." },
+          { v: "gh_app_68", label: "#68 GitHub App identity", impl: "Foundational if you ever add collaborators; heavy now." },
+          { v: "recovery_39", label: "§3.9 partial-run recovery", impl: "" },
+          { v: "target2_42", label: "#42 Target 2 (client-only federation) design/start", impl: "Its stated gate — drydock self-work — is now met, so this is a live option rather than a parked one." }
+        ]
+      },
+      {
+        id: "D2_target2", q: "#42 Target 2: what's the call now that its N3 gate is met?",
+        why: "Gated on 'drydock self-work works'. It does now (PR #59 merged, written by the factory). So the gate no longer justifies waiting — only priority can.",
+        type: "single", options: [
+          { v: "design_only", label: "Write the design/decision doc, build nothing", impl: "Recommended while Target 1 still has open gaps.", tag: "rec" },
+          { v: "start_build", label: "Start the client-only federation build", impl: "Would displace everything in D1." },
+          { v: "close_42", label: "Close #42 — Target 2 is not happening", impl: "Also legitimate; would let §4 shrink to a non-goals paragraph." }
+        ]
+      },
+      {
+        id: "D3_fixtures", q: "fixture-1 #45 (last live target) and the fixtures generally?",
+        why: "Both fixtures now hold 13 green oracles and no live work except fixture-1 #45. Fixtures cost maintenance and their role after dogfooding is a real question.",
+        ctx: "Running #45 exercises G2/G4 with every change since N2 applied; it produces a draft PR needing your merge.",
+        type: "single", options: [
+          { v: "run_45", label: "Run #45 now as the post-change confirmation", impl: "Real evidence, ~10 min of inference, one draft PR for you to merge.", tag: "rec" },
+          { v: "freeze_fixtures", label: "Freeze fixtures as regression-only; all new work dogfoods drydock", impl: "Stops fixture maintenance; loses the ability to test destructive paths on throwaway repos (which is the point of G4)." },
+          { v: "seed_more", label: "Seed fresh fixture targets regularly to keep G2 meaningful", impl: "Ongoing chore, keeps measurement honest." }
+        ]
+      },
+      {
+        id: "D4_upstream_41", q: "#41 (two narrowings in the kernel destructive guard): what do we do?",
+        why: "Upstream engram#63 is still open and our pin is v0.2.0. Our characterization test pins the current behavior, so this is purely about how long we wait.",
+        type: "single", options: [
+          { v: "wait", label: "Wait on upstream; keep the characterization test as the tripwire", impl: "Recommended unless the narrowings bite in practice.", tag: "rec" },
+          { v: "pr_upstream", label: "Send an upstream PR against engram", impl: "Faster resolution, and we own the review conversation." },
+          { v: "fork_pin", label: "Carry a local patch on the submodule", impl: "Fastest control, worst long-term cost (every bump re-conflicts)." }
+        ]
+      }
+    ]
+  },
+  {
+    section: "E · Safety posture you may want to tighten or loosen",
+    note: "These are all currently-set decisions. Listed because 'as many pending decisions as possible' includes revisiting ones I chose on your behalf.",
+    items: [
+      {
+        id: "E1_path_allowlist", q: "drydock's self-work path allowlist is factory/, fleet/, test/, research/. Right set?",
+        why: "gates/ was deliberately removed — drydock is its own graded repo and an oracle the graded entity can edit isn't an oracle. gates/probes/ is additionally in protectedPaths so re-adding gates/ later can't quietly unlock oracles.",
+        ctx: "Prefix matching only, no globs; vendor/ protected unconditionally regardless of allowlist; empty allowlist rejected.",
+        type: "multi", options: [
+          { v: "keep", label: "Keep exactly as-is", impl: "Note this means the factory cannot edit its own README or docs at repo root.", tag: "rec" },
+          { v: "add_root_docs", label: "Add root-level docs (README.md, AGENTS.md)", impl: "Lets it self-document; AGENTS.md is the file that constrains it, so weigh that." },
+          { v: "add_research_only_md", label: "Add research/ as markdown-only", impl: "Already covered by research/ being present; only relevant if you want a type restriction, which path scope does not currently express." },
+          { v: "revisit_gates", label: "Reconsider excluding gates/", impl: "I'd argue against it in writing before doing it." }
+        ]
+      },
+      {
+        id: "E2_autoMerge_ever", q: "autoMerge: is there any repo where it should ever be true?",
+        why: "Enforced today by capability removal — merge_pr is not in the tool list for autoMerge:false repos, and the prompt is derived from the same flag. Currently false everywhere.",
+        type: "single", options: [
+          { v: "never", label: "Never. Human merges, always.", impl: "Recommended and consistent with everything built so far.", tag: "rec" },
+          { v: "fixtures_only", label: "Fixtures may auto-merge (they're disposable); real repos never", impl: "Speeds up batteries; blurs 'what the gate did' vs 'what a human approved'." },
+          { v: "docs_only", label: "Possibly docs-only PRs in future, with byte-scoped approval", impl: "#47 makes this technically safe (approval names a commit); policy question is whether it's worth the exception." }
+        ]
+      },
+      {
+        id: "E3_reviews_required", q: "drydock main requires 0 approving reviews today. Keep?",
+        why: "With self-work live, the human gate is one click on your own PR. Branch protection already blocks force-push/deletion and enforces strict-up-to-date for admins.",
+        type: "single", options: [
+          { v: "keep_zero", label: "Keep 0 — I am the reviewer, single-operator repo", impl: "Status quo; fine while volume is low." },
+          { v: "require_ci", label: "0 reviews but CI required (#62 first)", impl: "Recommended once #62 exists: automatic check instead of a rubber-stamp review.", tag: "rec" },
+          { v: "require_one", label: "Require 1 approving review", impl: "Strongest; with one human account this mostly means 'wait for me to log in'." }
+        ]
+      },
+      {
+        id: "E4_token_budget", q: "Now that spend is measurable (§5.17), should tasks get a token budget alongside wall-clock?",
+        why: "M4 aborts on wall-clock only, and that gate taught us budgets below task duration just look like failures. Measured single-task cost: 160K–467K tokens, 78–88% cache reads.",
+        type: "single", options: [
+          { v: "hard_ceiling", label: "Yes — abort at a hard per-task ceiling (e.g. 1M tokens)", impl: "Catches runaway context growth that a 30-min wall clock doesn't." },
+          { v: "warn_only", label: "Warn/annotate only, never abort", impl: "Recommended first step: collect a distribution before enforcing.", tag: "rec" },
+          { v: "no_budget", label: "No — wall-clock is enough", impl: "Fewer knobs; local inference means cost isn't a bill." }
+        ]
+      }
+    ]
+  },
+  {
+    section: "F · Housekeeping and record-keeping",
+    items: [
+      {
+        id: "F1_branches", q: "Local branch cleanup — what should go?",
+        why: "Merged branches linger locally; one POC-era branch was restored at 88b8f43 after an earlier deletion, so its fate is deliberately yours.",
+        type: "multi", options: [
+          { v: "del_merged", label: "Delete merged chore branches (self-run-rework-detection, self-work-enablement-runbook)", impl: "", tag: "rec" },
+          { v: "keep_poc", label: "Keep feature/drydock-self-manageable (POC era) for reference", impl: "" },
+          { v: "del_poc", label: "Delete the POC branch too", impl: "It is reachable from reflog/origin history if it was ever pushed; verify before trusting that." }
+        ]
+      },
+      {
+        id: "F2_decision_record", q: "Where should these answers be recorded?",
+        why: "The plan currently carries decisions as dated prose sections (§5.x). That works but is getting long; a separate decision log makes 'what did we decide about X' greppable.",
+        type: "single", options: [
+          { v: "plan_sections", label: "Continue as dated §5.x sections in the plan", impl: "One document, chronological, already 490+ lines." },
+          { v: "decision_log", label: "New research/decision-log.md, one entry per decision with date + status", impl: "Recommended for exactly this situation — 20+ decisions now.", tag: "rec" },
+          { v: "issues_only", label: "Close as GitHub issues (one per decision)", impl: "Best traceability; more ceremony." }
+        ]
+      },
+      {
+        id: "F3_docs_sync", q: "Should the HTML reports under research/ be regenerated when the .md changes?",
+        why: "AGENTS.md says md is source of truth and html must stay in sync. That sync is currently manual and drifts.",
+        type: "single", options: [
+          { v: "manual", label: "Manual, as now — regenerate on request", impl: "" },
+          { v: "script", label: "Add a script/CI check that flags md/html drift", impl: "Fits with #62; catches silent drift before it becomes an incorrect report." }
+        ]
+      }
+    ]
+  },
+  {
+    section: "G · Free text (most useful part of this form)",
+    items: [
+      { id: "G1_constraints", q: "Constraints I should assume for the next stretch (time, GPU/endpoint availability, deadlines).", why: "e.g. is aurora free all day? Is there a date you want self-work running by? Anything you consider off-limits.", type: "text", rows: 4 },
+      { id: "G2_worry", q: "What are you most uneasy about in the current design?", why: "Written as-is, no framing. Unease that stays unspoken tends to become the thing that breaks.", type: "text", rows: 4 },
+      { id: "G3_done", q: "What does 'this is working' look like to you in a month? (concrete enough to check)", why: "e.g. 'drydock lands one self-work PR per week with me only merging' vs 'I never touch the fixtures again'.", type: "text", rows: 4 },
+      { id: "G4_notes", q: "Anything else — corrections to premises in this form, or questions you'd ask that aren't here.", why: "", type: "text", rows: 5 }
+    ]
+  }
+];
+
+// ---------------------------------------------------------------------------
+// Rendering + persistence. No dependencies, no network.
+// ---------------------------------------------------------------------------
+const STORE_KEY = "drydock-decisions-2026-10-31";
+const state = load();
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch { return {}; }
+}
+function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+
+const root = document.getElementById("questions");
+
+DATA.forEach((group) => {
+  const sec = el("section");
+  sec.appendChild(head(group.section, group.note));
+  group.items.forEach((item) => sec.appendChild(renderQuestion(group.section, item)));
+  root.appendChild(sec);
+});
+
+function el(tag, cls) { const n = document.createElement(tag); if (cls) n.className = cls; return n; }
+function head(title, note) {
+  const wrap = el("div");
+  const h = document.createElement("h2"); h.textContent = title; wrap.appendChild(h);
+  if (note) { const p = document.createElement("p"); p.className = "sec-note"; p.textContent = note; wrap.appendChild(p); }
+  return wrap;
+}
+
+function renderQuestion(sectionName, item) {
+  const box = el("div", "q");
+  box.id = `q-${item.id}`;
+  box.dataset.id = item.id;
+
+  const qh = el("div", "q-head");
+  const idSpan = el("span", "qid"); idSpan.textContent = item.id.replace(/_/g, " ").toUpperCase();
+  const h3 = document.createElement("h3"); h3.textContent = item.q;
+  qh.append(idSpan, h3);
+  if (item.blocking) {
+    const bt = el("span", "tag block"); bt.textContent = "needs you"; qh.appendChild(bt);
+  }
+  box.appendChild(qh);
+
+  if (item.why) { const w = el("p", "why"); w.textContent = item.why; box.appendChild(w); }
+  if (item.ctx) {
+    const d = document.createElement("details"); d.className = "ctx";
+    const s = document.createElement("summary"); s.textContent = "Context / evidence";
+    const p = document.createElement("p"); p.textContent = item.ctx;
+    d.append(s, p); box.appendChild(d);
+  }
+
+  if (item.type === "text") {
+    const ta = document.createElement("textarea");
+    ta.rows = item.rows || 4;
+    ta.value = state[item.id]?.value || "";
+    ta.addEventListener("input", () => { state[item.id] = { type: "text", value: ta.value }; afterChange(item.id); });
+    box.appendChild(ta);
+  } else {
+    const ul = el("ul", "opts");
+    const current = state[item.id]?.value || [];
+    item.options.forEach((opt) => {
+      const li = document.createElement("li");
+      const label = el("label", "opt");
+      const input = document.createElement("input");
+      input.type = item.type === "multi" ? "checkbox" : "radio";
+      input.name = item.id;
+      input.value = opt.v;
+      input.checked = current.includes(opt.v);
+      input.addEventListener("change", () => {
+        let next = item.type === "multi"
+          ? Array.from(box.querySelectorAll(`input[name="${item.id}"]:checked`)).map((i) => i.value)
+          : [opt.v];
+        if (item.max && next.length > item.max) { input.checked = false; return; }
+        state[item.id] = { type: item.type, value: next, other: state[item.id]?.other || "" };
+        afterChange(item.id);
+      });
+      const t = el("span", "t");
+      t.textContent = opt.label;
+      if (opt.tag === "rec") t.appendChild(tagEl("recommended", "rec"));
+      if (opt.impl) { const im = el("span", "impl"); im.textContent = opt.impl; t.appendChild(im); }
+      label.append(input, t);
+      li.appendChild(label);
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+
+    const otherWrap = el("div", "other");
+    const otherInput = document.createElement("input");
+    otherInput.type = "text";
+    otherInput.placeholder = "Other / qualification (optional)";
+    otherInput.value = state[item.id]?.other || "";
+    otherInput.addEventListener("input", () => {
+      if (!state[item.id]) state[item.id] = { type: item.type, value: [] };
+      state[item.id].other = otherInput.value;
+      afterChange(item.id);
+    });
+    otherWrap.appendChild(otherInput);
+    box.appendChild(otherWrap);
+  }
+
+  box.dataset.section = sectionName;
+  refreshClass(item.id);
+  return box;
+
+  function tagEl(text, cls) { const s = el("span", `tag ${cls}`); s.textContent = text; return s; }
+}
+
+function isAnswered(id) {
+  const a = state[id];
+  if (!a) return false;
+  if (a.type === "text") return String(a.value || "").trim().length > 0;
+  return Array.isArray(a.value) && a.value.length > 0;
+}
+
+function refreshClass(id) {
+  const box = document.getElementById(`q-${id}`);
+  if (!box) return;
+  box.classList.toggle("answered", isAnswered(id));
+  save(); updateCount();
+}
+
+function afterChange(id) { save(); updateCount(); }
+
+const allIds = DATA.flatMap((g) => g.items.map((i) => i.id));
+const blockingIds = DATA.flatMap((g) => g.items.filter((i) => i.blocking).map((i) => i.id));
+
+function updateCount() {
+  const done = allIds.filter(isAnswered).length;
+  const bdone = blockingIds.filter(isAnswered).length;
+  document.getElementById("count").textContent =
+    `${done} of ${allIds.length} answered · ${bdone}/${blockingIds.length} blocking`;
+}
+
+// ---- export ---------------------------------------------------------------
+function buildPayload(format) {
+  const answers = {};
+  const pending = [];
+  DATA.forEach((group) => group.items.forEach((item) => {
+    const a = state[item.id];
+    const answered = isAnswered(item.id);
+    if (!answered) pending.push(item.id);
+    answers[item.id] = {
+      section: group.section,
+      blocking: !!item.blocking,
+      question: item.q,
+      answered,
+      value: answered ? a.value : null,
+      other: answered && a.other ? a.other : null
+    };
+  }));
+  return { kind: "drydock-decisions", version: 1, exportedAt: new Date().toISOString(), format, answers, pending };
+}
+
+function toMarkdown(payload) {
+  const lines = ["# drydock decisions — answered " + payload.exportedAt.slice(0, 10), ""];
+  DATA.forEach((group) => {
+    const items = group.items.filter((i) => isAnswered(i.id));
+    if (!items.length) return;
+    lines.push(`## ${group.section}`, "");
+    items.forEach((item) => {
+      const a = payload.answers[item.id];
+      lines.push(`### ${item.id}${item.blocking ? " (blocking)" : ""}`);
+      lines.push(item.q);
+      if (a.value === null) return;
+      if (Array.isArray(a.value)) {
+        const labels = a.value.map((v) => {
+          const opt = item.options.find((o) => o.v === v);
+          return opt ? opt.label : v;
+        });
+        lines.push("- **Chose:** " + labels.join(" · "));
+      } else {
+        lines.push("- **Answer:** " + String(a.value).replace(/\n/g, " ⏎ "));
+      }
+      if (a.other) lines.push("- **Note:** " + a.other);
+      lines.push("");
+    });
+  });
+  if (payload.pending.length) lines.push("## Still pending", "", payload.pending.join(", "), "");
+  return lines.join("\n");
+}
+
+function output(format) {
+  const payload = buildPayload(format);
+  document.getElementById("out").value = format === "json" ? JSON.stringify(payload, null, 2) : toMarkdown(payload);
+  const missingBlocking = blockingIds.filter((id) => !isAnswered(id));
+  document.getElementById("missing").textContent = missingBlocking.length
+    ? `Still unanswered — blocking: ${missingBlocking.join(", ")}. Total pending: ${payload.pending.length} of ${allIds.length}.`
+    : "All questions answered. This export is complete.";
+}
+
+document.getElementById("btn-json").onclick = () => output("json");
+document.getElementById("btn-json-2").onclick = () => output("json");
+document.getElementById("btn-md").onclick = () => output("markdown");
+document.getElementById("btn-copy").onclick = async () => {
+  output("json");
+  const ta = document.getElementById("out");
+  ta.select();
+  try { await navigator.clipboard.writeText(ta.value); document.getElementById("missing").textContent = "Copied. Paste it into the chat."; }
+  catch { document.execCommand("copy"); document.getElementById("missing").textContent = "Copied (fallback). Paste it into the chat."; }
+};
+document.getElementById("btn-dl").onclick = () => {
+  const payload = buildPayload("json");
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `drydock-decisions-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById("btn-clear").onclick = () => {
+  if (!confirm("Clear every answer in this browser? The exported file (if you saved one) is unaffected.")) return;
+  Object.keys(state).forEach((k) => delete state[k]);
+  save();
+  location.reload();
+};
+document.getElementById("btn-jump").onclick = () => {
+  const next = allIds.find((id) => !isAnswered(id));
+  if (!next) { document.getElementById("missing").textContent = "Nothing unanswered — export when ready."; return; }
+  const box = document.getElementById(`q-${next}`);
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+  box.style.background = "#fffbeb";
+  setTimeout(() => { box.style.background = ""; }, 900);
+};
+
+updateCount();
+</script>
+</body>
+</html>
