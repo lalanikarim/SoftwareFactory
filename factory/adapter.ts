@@ -13,7 +13,49 @@
 //
 // Standalone: node --experimental-strip-types factory/adapter.ts [port] <routesFile> [logPath]
 
-import { startIntakeServer, loadRoutes, intakeRequestId, renderIntakeContent, type Route } from "./intake.ts";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { startIntakeServer, loadRoutes, intakeRequestId, renderIntakeContent, RoutesDriftedError, type Route } from "./intake.ts";
+
+/**
+ * sha256 of a routes file. The supervisor and the adapter both report this hash in their startup
+ * logs, so a drift event is diagnosable from logs alone: which write does the running adapter not
+ * match? (#69)
+ */
+export function routesFileHash(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/**
+ * Per-request drift check for a routes file (decision C3, #69): the adapter validates signatures and
+ * routes against the snapshot it loaded at start; if the file on disk no longer hashes to that
+ * snapshot, serving on old authority is wrong — refuse the request (the caller gets 503) and stop,
+ * so the supervisor can restart us against the new policy. No silent reload: a policy change taking
+ * effect without an explicit process boundary would break "policy reviews like code".
+ *
+ * `terminate` is injectable so tests can observe the exit instead of dying; the default exits after a
+ * short delay so the 503 response has a chance to flush first.
+ */
+export function makeRoutesDriftCheck({ routesFile, startupHash, terminate }: {
+  routesFile: string;
+  startupHash: string;
+  terminate?: () => void;
+}): () => void {
+  const die = terminate ?? (() => setTimeout(() => process.exit(1), 250).unref());
+  return () => {
+    let current: string;
+    try {
+      current = routesFileHash(routesFile);
+    } catch {
+      current = "<unreadable>"; // a missing file is drift too: the policy behind us is gone
+    }
+    if (current !== startupHash) {
+      console.error(`[adapter] routes drift: ${routesFile} changed since start (startup ${startupHash.slice(0, 16)}, now ${String(current).slice(0, 16)}) — exiting for supervisor restart`);
+      die();
+      throw new RoutesDriftedError(`routes file changed since adapter start (startup hash ${startupHash.slice(0, 16)}, current ${String(current).slice(0, 16)})`);
+    }
+  };
+}
 
 /** Build a dispatch(repo, event) that forwards to the owning instance's /tasks. */
 export function makeRouteDispatch(routes: Route[]) {
@@ -45,6 +87,8 @@ if (isMain) {
     process.exit(1);
   }
   const routes = loadRoutes(routesFile);
+  // Hash the same bytes we just parsed, so startup and per-request checks compare like with like.
+  const startupHash = routesFileHash(routesFile);
   const logPath = process.argv[4] ?? "data/intake-adapter.jsonl";
   startIntakeServer({
     port,
@@ -52,8 +96,9 @@ if (isMain) {
     routes,
     dispatch: makeRouteDispatch(routes),
     logPath,
+    routesDriftCheck: makeRoutesDriftCheck({ routesFile, startupHash }),
   }).then(({ server, port: actualPort, host }) => {
-    console.log(`adapter listening on http://${host}:${actualPort} (routes: ${routes.map((r) => r.repo).join(", ")})`);
+    console.log(`adapter listening on http://${host}:${actualPort} (routes: ${routes.map((r) => r.repo).join(", ")}, routes-hash ${startupHash.slice(0, 16)})`);
     const shutdown = () => {
       server.close();
       process.exit(0);

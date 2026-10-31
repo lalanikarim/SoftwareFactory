@@ -106,6 +106,13 @@ export function verifyGitHubSignature({ signatureHeader, rawBody, secret }: { si
   return timingSafeEqual(a, b);
 }
 
+/**
+ * Thrown by a routes-drift check when the on-disk routes file no longer matches what the adapter
+ * started with. The intake server answers 503 for the in-flight request; terminating the process is
+ * the checker's own job (the supervisor restarts it against the new file). See #69.
+ */
+export class RoutesDriftedError extends Error {}
+
 export interface Route {
   repo: string;
   secret: string;
@@ -211,7 +218,7 @@ function readBoundedBody(req: http.IncomingMessage, cap: number): Promise<{ body
  * (plan §3.2 / gate M3) — signature validity doubles as per-repo
  * authorization. In this mode dispatch is called as dispatch(repo, event).
  */
-export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret, routes, dispatch, logPath, eligibilityLabel = AGENT_LABEL }: {
+export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret, routes, dispatch, logPath, eligibilityLabel = AGENT_LABEL, routesDriftCheck }: {
   port?: number;
   host?: string;
   webhookSecret?: string;
@@ -220,6 +227,13 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
   logPath?: string;
   /** Single-secret mode only; in routes mode each route carries its own from the registry. */
   eligibilityLabel?: string;
+  /**
+   * Called on every webhook request BEFORE anything touches the payload. Throw RoutesDriftedError
+   * when the policy behind this adapter has changed out from under it: a stale route set is exactly
+   * what turns a valid delivery into a wrong refusal (or worse, a wrong acceptance), and the fix is
+   * to stop rather than to serve on old authority. #69.
+   */
+  routesDriftCheck?: () => void;
 }): Promise<{ server: http.Server; port: number; host: string }> {
   if (routes) validateRoutes(routes);
   const hasAuth = Boolean(webhookSecret) || Boolean(routes?.length);
@@ -239,6 +253,26 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
       if (req.method !== "POST" || url.pathname !== "/webhook/github") {
         res.writeHead(404, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "not found" }));
+      }
+
+      // Routes drift check FIRST: if the policy file changed since this adapter started, refuse on
+      // old authority and let the checker terminate us. GitHub retries the delivery; the supervisor
+      // brings the adapter back against the new file.
+      if (routesDriftCheck) {
+        try {
+          routesDriftCheck();
+        } catch (e) {
+          if (e instanceof RoutesDriftedError) {
+            const line = { deliveryId: req.headers["x-github-delivery"] ?? null, accepted: false, reason: `routes drift: ${(e as Error).message}`, ts: new Date().toISOString() };
+            if (logPath) {
+              await mkdir(dirname(logPath), { recursive: true });
+              await appendFile(logPath, JSON.stringify(line) + "\n");
+            }
+            res.writeHead(503, { "content-type": "application/json" });
+            return res.end(JSON.stringify({ error: (e as Error).message }));
+          }
+          throw e;
+        }
       }
 
       // Body cap, enforced BEFORE buffering/parsing/signature. Refuse and then
