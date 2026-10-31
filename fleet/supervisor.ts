@@ -39,7 +39,7 @@ const MAX_RESTARTS = 10;
 const RESTART_BACKOFF_MS = 5_000;
 const READY_RE = /ready on http:\/\/127\.0\.0\.1:(\d+)\/ /;
 
-interface FactoryEntry {
+export interface FactoryEntry {
   repo: string;
   secret: string; // GitHub webhook secret for this repo (must match the repo's webhook config)
   config?: string;
@@ -55,6 +55,41 @@ interface AdapterEntry {
 interface Fleet {
   adapter?: AdapterEntry;
   factories: FactoryEntry[];
+}
+
+/**
+ * Build the adapter's routes list (exported so the mapping is testable without spawning anything).
+ *
+ * `eligibilityLabel` is read from the registry rather than the fleet file, and this is the reason
+ * stated in code: which label triggers work is policy (§5.11). If a deployment file could set it, a
+ * typo there would silently stop every event for that repo while the adapter reported healthy —
+ * exactly the failure mode intake had before per-repo labels were threaded through at all.
+ */
+export function buildRoutes(
+  factories: FactoryEntry[],
+  bases: Map<string, string>,
+  registry: { repos: Array<{ repo: string; eligibilityLabel: string }> },
+  env: NodeJS.ProcessEnv = process.env,
+): Array<{
+  repo: string;
+  secret: string;
+  target?: string;
+  token?: string;
+  allowedSenders?: string[];
+  eligibilityLabel: string;
+}> {
+  return factories.map((f) => {
+    const entry = registry.repos.find((r) => r.repo === f.repo);
+    if (!entry) throw new Error(`buildRoutes: ${f.repo} is not in the repo registry`);
+    return {
+      repo: f.repo,
+      secret: env[`GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")}`] ?? f.secret!,
+      ...(bases.has(f.repo) ? { target: bases.get(f.repo)! } : {}),
+      ...(f.token ? { token: f.token } : {}),
+      ...(f.allowedSenders ? { allowedSenders: f.allowedSenders } : {}),
+      eligibilityLabel: entry.eligibilityLabel,
+    };
+  });
 }
 
 /**
@@ -125,13 +160,7 @@ async function runFleet(fleetPath: string): Promise<void> {
     if (!fleet.adapter) return;
     const routesFile = rel(fleetPath, fleet.adapter.routesFile);
     mkdirSync(dirname(routesFile), { recursive: true });
-    const routes = fleet.factories.map((f) => ({
-      repo: f.repo,
-      secret: process.env[`GITHUB_WEBHOOK_SECRET_${f.repo.replace("/", "_")}`] ?? f.secret!,
-      ...(bases.has(f.repo) ? { target: bases.get(f.repo)! } : {}),
-      ...(f.token ? { token: f.token } : {}),
-      ...(f.allowedSenders ? { allowedSenders: f.allowedSenders } : {}),
-    }));
+    const routes = buildRoutes(fleet.factories, bases, loadRegistry());
     writeFileSync(routesFile, JSON.stringify(routes, null, 2));
     console.log(`[supervisor] wrote ${routes.length} route(s) to ${routesFile}`);
   };

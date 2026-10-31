@@ -341,8 +341,8 @@ Added: `factory/config/lalanikarim_drydock.json` (`testCommand: npm test`, `setu
 The registry entry stays `enabled: false`. What remains before N3 flips it is deployment, plus three risks worth naming now:
 
 - **Recursion.** A repo's own `testCommand` must never include gates that mutate GitHub (G1 opens PRs, G4 merges). `npm test` is safe today precisely because it is unit-only — that is a property to preserve, not an accident to rediscover.
-- **A green suite is a weak judge here.** For fixtures we have behavior oracles; for drydock the worker would be graded by the same suite it can edit. G2/G3 should stay in the loop for self-work rather than trusting `npm test` alone.
-- **Nothing stops a worker touching `vendor/engram`.** The 5-file / `src|test` scope rule lives in the G2 harness, not the pipeline, and submodule pointer changes are exactly the kind of edit that passes tests while being unacceptable. Candidate fix: a per-repo path allowlist in the registry, enforced by `open_draft_pr` before push.
+- **A green suite is a weak judge here.** For fixtures we have behavior oracles; for drydock the worker would be graded by the same suite it can edit. G2/G3 should stay in the loop for self-work rather than trusting `npm test` alone. Partly closed since: `gates/` — including `gates/probes/*.mjs`, the oracles — is outside drydock's path allowlist, so a self-run cannot soften the checks that judge it (§5.13). Editing assertions in `test/` remains possible and is accepted; those are the factory's own unit tests, which a change to the factory often legitimately updates.
+- **~~Nothing stops a worker touching `vendor/engram`.**~~ Was: the 5-file / `src|test` scope rule lived in the G2 harness, not the pipeline, and submodule pointer changes are exactly the kind of edit that passes tests while being unacceptable. Now enforced by path scope (§5.13): `vendor/` is protected unconditionally for every repo, before any allowlist is consulted.
 
 ### 5.13 Path scope: the pipeline cannot change what it is not allowed to touch (2026-10-28)
 
@@ -368,6 +368,10 @@ branch pushed to origin? NO — nothing was pushed
 ```
 
 **Considered and declined:** making the G2 harness read its scope rule from the registry. The harness rule is intentionally stricter (it also bounds file *count*, and it runs on a checkout rather than pre-push), and silently unifying them would couple a review heuristic to a safety control — if one day they must agree, that should be an explicit decision, not a refactor side effect.
+
+**Drydock's own allowlist excludes `gates/`** — it is `factory/ fleet/ test/ research/`. The reason is specific to self-hosting: `gates/` holds the G-harnesses and `gates/probes/*.mjs`, the oracles that decide whether work passes. For a fixture repo that was harmless, because G2 runs from *outside* the graded repo; drydock is its own graded repo, so a diff that softened an oracle would be judged by the thing it softened — and with zero required approving reviews the human gate is one click on one's own PR. `gates/probes/` is additionally declared protected for drydock, so re-adding `gates/` later cannot quietly unlock the oracles.
+
+**The eligibility label is policy, read per route.** GitHub does not auto-create labels and intake matches on name, so enabling a repo also means creating its label in that repo. The label now flows from the registry through `buildRoutes()` (`fleet/supervisor.ts`) into each adapter route; the fleet file cannot set it, because a deployment typo there would silently stop one repo's work while the adapter reported healthy. Before this threading the trigger was hardcoded to `agent` while drydock declared `build` — that combination yields a factory which boots cleanly, passes every health check, and never receives anything.
 
 **Still true after this:** scope is about paths, not content. A worker can still write terrible code inside `src/`; that is what the reviewer and G2/G3 are for. And `autoMerge` remains separately enforced (§5.11) — path scope says what may change, auto-merge says whether it may land.
 

@@ -17,13 +17,20 @@ import { dirname } from "node:path";
 
 export const AGENT_LABEL = "agent";
 
-/** True for events that should start (or re-submit) factory work. */
-export function isAgentIssueEvent(event: any): boolean {
+/**
+ * True for events that should start (or re-submit) factory work.
+ *
+ * `eligibilityLabel` comes from the repo registry (§5.11); it defaults to "agent" only for callers
+ * that predate per-repo labels. Before this parameter existed the label was hardcoded here while the
+ * registry declared drydock's as "build" — a drydock factory would have booted, passed every health
+ * check, and never received work, because no event could ever match.
+ */
+export function isAgentIssueEvent(event: any, eligibilityLabel: string = AGENT_LABEL): boolean {
   if (!event || typeof event !== "object") return false;
-  if (event.action === "labeled") return event.label?.name === AGENT_LABEL;
+  if (event.action === "labeled") return event.label?.name === eligibilityLabel;
   if (event.action === "opened") {
     const labels = event.issue?.labels;
-    return Array.isArray(labels) && labels.some((l: any) => l?.name === AGENT_LABEL);
+    return Array.isArray(labels) && labels.some((l: any) => l?.name === eligibilityLabel);
   }
   return false;
 }
@@ -59,8 +66,11 @@ export function renderIntakeContent(event: any): string {
  * Handle one webhook event. Returns { accepted, reason?, requestId?, submission? }.
  * dispatch is the (requestId, content) -> submission forwarder (factory /tasks).
  */
-export async function handleIntakeEvent(event: any, { dispatch }: { dispatch: (a: { requestId: string; content: string }) => Promise<any> }) {
-  if (!isAgentIssueEvent(event)) {
+export async function handleIntakeEvent(
+  event: any,
+  { dispatch, eligibilityLabel = AGENT_LABEL }: { dispatch: (a: { requestId: string; content: string }) => Promise<any>; eligibilityLabel?: string },
+) {
+  if (!isAgentIssueEvent(event, eligibilityLabel)) {
     return { accepted: false, reason: "not an agent issue event" };
   }
   const requestId = intakeRequestId(event);
@@ -89,6 +99,8 @@ export interface Route {
   target?: string; // owning instance's base URL (e.g. http://127.0.0.1:9601)
   token?: string; // the instance's API_TOKEN (core server requires Bearer auth on /tasks)
   allowedSenders?: string[];
+  /** Which issue label makes work eligible for THIS repo — copied from the registry by the supervisor. */
+  eligibilityLabel?: string;
 }
 
 /** Validate a multi-repo route list (multi-repo plan §3.2). */
@@ -106,6 +118,11 @@ export function validateRoutes(routes: Route[]): Route[] {
     // factory. Checked AFTER signature verification, so sender.login is trusted.
     if (r.allowedSenders !== undefined && (!Array.isArray(r.allowedSenders) || !r.allowedSenders.length || !r.allowedSenders.every((s) => typeof s === "string"))) {
       throw new Error(`route ${r.repo} allowedSenders must be a non-empty array of login strings`);
+    }
+    // Eligibility label is policy, not deployment: the supervisor copies it from the registry, so a
+    // route that spells it wrong would silently drop every event for that repo (health stays green).
+    if (r.eligibilityLabel !== undefined && (typeof r.eligibilityLabel !== "string" || !r.eligibilityLabel.trim())) {
+      throw new Error(`route ${r.repo} eligibilityLabel must be a non-empty string when present`);
     }
     if (seen.has(r.repo)) throw new Error(`duplicate route for repo ${r.repo}`);
     seen.add(r.repo);
@@ -145,13 +162,15 @@ export function loadRoutes(path: string): Route[] {
  * (plan §3.2 / gate M3) — signature validity doubles as per-repo
  * authorization. In this mode dispatch is called as dispatch(repo, event).
  */
-export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret, routes, dispatch, logPath }: {
+export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret, routes, dispatch, logPath, eligibilityLabel = AGENT_LABEL }: {
   port?: number;
   host?: string;
   webhookSecret?: string;
   routes?: Route[];
   dispatch: ((a: { requestId: string; content: string }) => Promise<any>) | ((repo: string, event: any) => Promise<any>);
   logPath?: string;
+  /** Single-secret mode only; in routes mode each route carries its own from the registry. */
+  eligibilityLabel?: string;
 }): Promise<{ server: http.Server; port: number; host: string }> {
   if (routes) validateRoutes(routes);
   const hasAuth = Boolean(webhookSecret) || Boolean(routes?.length);
@@ -234,13 +253,14 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
 
       let result: any;
       if (routes) {
-        if (!isAgentIssueEvent(event)) {
+        const eligibility = routes.find((r) => r.repo === matchedRepo)?.eligibilityLabel ?? AGENT_LABEL;
+        if (!isAgentIssueEvent(event, eligibility)) {
           result = { accepted: false, reason: "not an agent issue event" };
         } else {
           result = { accepted: true, requestId: intakeRequestId(event), routedTo: matchedRepo };
         }
       } else {
-        result = await handleIntakeEvent(event, { dispatch: dispatch as (a: { requestId: string; content: string }) => Promise<any> });
+        result = await handleIntakeEvent(event, { dispatch: dispatch as (a: { requestId: string; content: string }) => Promise<any>, eligibilityLabel });
       }
       const line = {
         deliveryId: req.headers["x-github-delivery"] ?? null,

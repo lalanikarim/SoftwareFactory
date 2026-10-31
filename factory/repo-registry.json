@@ -33,7 +33,8 @@
       "enabled": false,
       "autoMerge": false,
       "configFile": "factory/config/lalanikarim_drydock.json",
-      "pathAllowlist": ["factory/", "fleet/", "gates/", "test/", "research/"],
+      "pathAllowlist": ["factory/", "fleet/", "test/", "research/"],
+      "protectedPaths": ["gates/probes/"],
       "eligibilityLabel": "build",
       "note": "N3 dogfood target. Disabled: no deployment fleet file or GitHub webhook for this repo yet, so nothing should be running a factory here. autoMerge is false permanently — drydock runs would stop at the draft PR for a human to merge (§5.11)."
     }
