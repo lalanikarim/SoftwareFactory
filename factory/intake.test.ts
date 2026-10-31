@@ -175,7 +175,7 @@ const issueEvent = (repo: string, opts: { action?: string; labels?: string[]; se
   });
 
   // /health stays an unauthenticated liveness probe but must not name the
-  // configured repositories (this port is public under Funnel).
+  // configured repositories: assume any published listener is internet-reachable.
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200, "unauthenticated liveness must stay 200");
   const healthBody = await health.text();

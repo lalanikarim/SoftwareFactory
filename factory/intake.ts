@@ -24,8 +24,9 @@ export const AGENT_LABEL = "agent";
  * no legitimate reason to accept larger bodies. Anything over this cap is
  * refused with HTTP 413 BEFORE it is buffered, parsed, or signature-checked —
  * an anonymous caller must not be able to control how much memory one in-flight
- * request allocates (the listener is exposed via Tailscale Funnel, i.e. the
- * public internet, with no other filter in front).
+ * request allocates. Whatever edge publishes this port, assume it is reachable
+ * from the public internet with nothing else in front of it — the transport is
+ * a deployment choice and deliberately not named here.
  */
 export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -198,7 +199,8 @@ function readBoundedBody(req: http.IncomingMessage, cap: number): Promise<{ body
  *     running size passes the cap. The connection is destroyed after the 413
  *     flushes so the caller cannot keep sending.
  *   - GET /health reports liveness only — it must not name configured
- *     repositories to anonymous callers on a public (Funnel) URL.
+ *     repositories to anonymous callers, since this listener is meant to be
+ *     published behind an operator-chosen HTTPS edge.
  *   - Loopback without a secret is local-development mode only (the G0
  *     battery); it is never acceptable for a reachable endpoint.
  *
@@ -228,9 +230,9 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/health") {
-        // Liveness only. This endpoint is unauthenticated and public under
-        // Funnel: naming configured repositories here would disclose private
-        // repo names to strangers.
+        // Liveness only. This endpoint is unauthenticated, and once the listener
+        // is published anyone can reach it: naming configured repositories here
+        // would disclose private repo names to strangers.
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify({ status: "ok" }));
       }
