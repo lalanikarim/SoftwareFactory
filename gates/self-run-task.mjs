@@ -18,6 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { loadFactoryEnv, spawnInstance, defaultConfigPath, postTask } from "./lib.ts";
+import { formatUsage, readInstanceUsage } from "./usage.ts";
 
 loadFactoryEnv();
 
@@ -112,5 +113,12 @@ try {
   }
 } finally {
   await instance.close();
+  // Spend is read after close, from the durable store: usage lives in per-conversation `pi.usage`
+  // documents, so an interrupted run still reports what it consumed up to the point it stopped.
+  try {
+    console.log(formatUsage(readInstanceUsage(instance.root)));
+  } catch (err) {
+    console.warn(`[self-run] token accounting unavailable: ${err.message}`);
+  }
   console.log(`[self-run] instance closed; verify with: node --experimental-strip-types gates/self-intake-hardening.mjs <workspace>`);
 }
