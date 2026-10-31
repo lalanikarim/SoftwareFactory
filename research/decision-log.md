@@ -78,9 +78,11 @@ Accepted posture for a single-operator repo. Mitigations in force: capability re
 
 ## 2026-10-31 — code approach decisions
 
-### C3 — #69: write routes before spawning; verify hash per request; exit loudly on drift · **adopted**
+### C3 — #69: write routes before spawning; verify hash per request; exit loudly on drift · **adopted — implemented**
 
 No silent hot-reload. A policy change becomes effective through an explicit restart, which keeps "policy reviews like code" true and makes the failure mode a dead listener instead of a healthy-looking one with stale authority.
+
+Implemented: supervisor writes the routes file before spawning anything (atomic temp+rename, always overwrite — a leftover file can no longer survive); adapter hashes the file at start and on every webhook request; changed file → 503 + audited refusal + exit, supervisor restarts against current policy. Both sides log the hash. Live-verified: with a running adapter, a supervisor-style secret rotation made an old-secret-signed request return 503 ("startup bda868…, now 4cc916…") and terminate the process.
 
 ### C4 — §3.9 T1: preserve the branch, mark resumable, requeue once with the diff as context · **adopted**
 
@@ -175,5 +177,5 @@ Concrete enough to check against `research/work-queue.md`: every in-flight item 
 | R1 | ~~No CI~~ and 0 required approving reviews: nothing *required* re-runs tests after a draft PR exists | C2-rev + E3 | **Mostly closed by C2-rev**: CI runs on every draft PR head. Residual gap until the operator makes `unit-suite` a required status check (advisory today); C1 still covers the pre-push path |
 | R2 | Self-work can edit `AGENTS.md`, the file that constrains it | E1 | Recommend moving it to `protectedPaths`; human merge is currently the only control |
 | R3 | Public listener (Funnel) on a laptop holding an account-wide credential | A1 + A2, credential status today | B1 PAT is a **prerequisite** for publishing, not a follow-up; funnel URL is revocable; `allowedSenders` stays on |
-| R4 | Stale policy accepted between fleet change and restart | #69 open | C3 removes it; until then the runbook's restart-and-read-the-startup-line step is mandatory |
+| R4 | ~~Stale policy accepted between fleet change and restart~~ | **#69 closed** (this PR) | Supervisor writes fresh routes before spawn (atomic, always overwrite); adapter re-hashes per request and exits on drift. Residual: fleet-file changes still need a supervisor restart (fleet is read once at start) — documented in the runbook |
 | R5 | Re-verification of a draft PR after rework relies on the same worker-run command | C1 without CI | Byte-scoped approval (#47) means an approval names a commit, but nothing re-tests that commit independently |
