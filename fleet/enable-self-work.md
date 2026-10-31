@@ -59,7 +59,9 @@ The adapter reads its routes file when it starts; the supervisor writes that fil
 [supervisor] wrote 1 route(s) to /Users/…/fleet/data/routes.json
 ```
 
-The listener was therefore validating signatures against routes that no longer described what should be running, and a correctly signed drydock delivery would have been refused as an unknown repo. Until this is fixed in code: **after any fleet or registry change, restart the supervisor and read the adapter's startup line** — it must list exactly the repos you expect. A signed probe with a deliberately ineligible label is the cheap confirmation (unknown-repo and not-eligible are different refusals).
+**Fixed 2026-10-31 (#69, decision C3).** The supervisor now writes the routes file *before* spawning anything — atomically (temp + rename, so a reader never sees partial JSON) — and always overwrites on adapter start, so a leftover file can no longer survive. The adapter hashes the file at startup and re-hashes it on **every** webhook request; a changed file means the in-flight request is refused with 503 (audited), the adapter exits, and the supervisor restarts it against current policy. Both sides log the hash, so "which write does the running adapter not match?" is answerable from logs alone.
+
+What remains manual: **fleet-file changes** (adding/removing factories) still require a supervisor restart — the fleet file is read once at start. Registry changes (labels, allowlists) take effect on the next supervisor or factory restart. The startup-line check stays as cheap confirmation: it must list exactly the repos you expect, and the adapter's `routes-hash` should match the supervisor's last `wrote N route(s) … (hash …)` line.
 
 ## 3. Publish the listener, then prove what it discloses
 

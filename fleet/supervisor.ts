@@ -27,7 +27,8 @@
 //   node --experimental-strip-types fleet/supervisor.ts status <fleet.json>
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -55,6 +56,23 @@ interface AdapterEntry {
 interface Fleet {
   adapter?: AdapterEntry;
   factories: FactoryEntry[];
+}
+
+/**
+ * Atomically write the routes file and return its sha256.
+ *
+ * Atomicity matters because the adapter re-reads this file on every request to detect drift (#69):
+ * a temp-file + rename means a reader sees either the old complete file or the new one, never a
+ * half-written JSON document that would look like (and be treated as) policy. The returned hash is
+ * what both sides log, so "which write does the running adapter not match?" is answerable from logs.
+ */
+export function writeRoutesFile(routesFile: string, routes: unknown): string {
+  mkdirSync(dirname(routesFile), { recursive: true });
+  const text = JSON.stringify(routes, null, 2);
+  const tmp = `${routesFile}.tmp-${process.pid}`;
+  writeFileSync(tmp, text);
+  renameSync(tmp, routesFile); // POSIX rename over an existing path is atomic
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /**
@@ -159,11 +177,15 @@ async function runFleet(fleetPath: string): Promise<void> {
   const writeRoutes = () => {
     if (!fleet.adapter) return;
     const routesFile = rel(fleetPath, fleet.adapter.routesFile);
-    mkdirSync(dirname(routesFile), { recursive: true });
     const routes = buildRoutes(fleet.factories, bases, loadRegistry());
-    writeFileSync(routesFile, JSON.stringify(routes, null, 2));
-    console.log(`[supervisor] wrote ${routes.length} route(s) to ${routesFile}`);
+    const hash = writeRoutesFile(routesFile, routes);
+    console.log(`[supervisor] wrote ${routes.length} route(s) to ${routesFile} (hash ${hash.slice(0, 16)})`);
   };
+
+  // #69: the routes file is written BEFORE anything is spawned. The old seed-if-missing logic let a
+  // leftover file from a previous run survive — the adapter then started against stale policy and
+  // never re-read it. Overwriting unconditionally means every start begins from the current fleet.
+  writeRoutes();
 
   const startFactory = (f: FactoryEntry) => {
     const key = `factory:${f.repo}`;
@@ -215,9 +237,11 @@ async function runFleet(fleetPath: string): Promise<void> {
       return;
     }
     const a = fleet.adapter!;
+    // Rewrite immediately before spawning: the adapter hashes this file at start and on every
+    // request (#69). A fresh write here means a restarted adapter always adopts current policy,
+    // even if something external touched the file while it was down.
+    writeRoutes();
     const routesFile = rel(fleetPath, a.routesFile);
-    mkdirSync(dirname(routesFile), { recursive: true });
-    if (!existsSyncSafe(routesFile)) writeRoutes(); // seed an empty-but-valid file
     const args = ["--experimental-strip-types", join(REPO_ROOT, "factory", "adapter.ts"), String(a.port), routesFile, a.logPath ? rel(fleetPath, a.logPath) : join(dirname(routesFile), "intake-adapter.jsonl")];
     console.log(`[supervisor] starting ${key} (port ${a.port}) — attempt ${restarts.get(key)}`);
     const child = spawnProc(key, args, process.env);
@@ -241,15 +265,6 @@ async function runFleet(fleetPath: string): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-}
-
-function existsSyncSafe(p: string): boolean {
-  try {
-    readFileSync(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function statusFleet(fleetPath: string): Promise<void> {
