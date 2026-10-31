@@ -40,14 +40,18 @@ jobs:
       # relative path, so which kernel they run against is whatever this checkout carries. Log it,
       # and fail if the checked-out submodule sha differs from the gitlink recorded in HEAD —
       # that is drift, and a green suite on the wrong kernel would be the worst kind of false pass.
+      #
+      # Note: `git rev-parse vendor/engram` from the superproject does NOT resolve the gitlink
+      # (it echoes the path back), so the checked-out sha is read from inside the submodule and
+      # the recorded one from ls-tree. Tags are not fetched by the Actions submodule checkout,
+      # so only the sha is reported.
       - name: Kernel pin check
         run: |
           set -euo pipefail
           git submodule status
-          checked_out=$(git rev-parse vendor/engram)
+          checked_out=$(git -C vendor/engram rev-parse HEAD)
           recorded=$(git ls-tree HEAD vendor/engram | awk '{print $3}')
-          tag=$(git -C vendor/engram describe --tags --always 2>/dev/null || echo "no-tag")
-          echo "::notice::tests run against engram ${checked_out} (${tag})"
+          echo "::notice::tests run against engram ${checked_out}"
           if [ "$checked_out" != "$recorded" ]; then
             echo "::error::submodule drift: checked out ${checked_out}, gitlink records ${recorded}"
             exit 1
