@@ -433,3 +433,61 @@ The self-check module is pure except for one fetch (`catalogModelIds` / `isModel
 **Verified end to end:** after pinning, G4 T1 on fixture-1 issue #42 — `approval-bound-to-commit {headSha: 990bf283…, key: b8ef33e9d80d}` → `head-still-verified` → merged `bc82200e`, exactly one merge commit, landed non-merge sha equal to the verified head, and the merge commit's parents include the approved sha. **GATE G4: PASS in 24s.** That run is also the first evidence for #47's byte-scoped approval *and* closes the last live target on fixture-1 except #45.
 
 **Standing lesson:** an availability question ("can I run this model?") answered by two components independently, with the disagreement surfacing as a terminal task state nobody polls, is invisible until a gate hangs. Check at the boundary where the process can still refuse to start.
+
+### 5.16 First drydock self-work run: the factory fixes drydock (2026-10-30 → 10-31)
+
+The goal of N3 was not "drydock is listed in a registry" but "drydock's own pipeline can land a change to drydock". It did, including one full rework cycle. Sequence:
+
+| Step | What happened |
+|---|---|
+| Enablement | Registry entry flipped `enabled: true` (PR #58). Safety no longer rests on the repo being disabled: it rests on `autoMerge:false` **capability removal** (`merge_pr` absent from the tool list, §5.11) plus path scope (§5.13) with `gates/` categorically outside the allowlist and `gates/probes/` additionally protected |
+| Task | Issue #57 — intake hardening for a published listener: `/health` must not enumerate routes, and an over-cap request body must be refused from the headers rather than after buffering (`MAX_WEBHOOK_BODY_BYTES = 1 MiB`) |
+| Oracle first | `gates/self-intake-hardening.mjs` is a behavior oracle written **before the fix existed** and ran 4/6 red on `main`. It exercises the real intake server over raw sockets, because `fetch()` cannot observe an early refusal (the connection kill surfaces as EPIPE in the caller, not as a status) |
+| Dispatch | `gates/self-run-task.mjs` posts the issue through the production pipeline (`POST /tasks` on a supervised `factory/main.ts` child), then polls until the branch head changes — deliberately **not** through the webhook, so the public listener stayed down while its own hardening was in flight |
+| Attempt 1 | Worker → independent review → draft PR #59. It shipped a defect: the new over-cap test used `fetch()`, whose EPIPE became an unhandled rejection that killed the `npm test` chain, and the PR body asserted the tests passed while `npm test` exited non-zero |
+| Detection | Nothing in the pipeline noticed — no CI job (#62), and `open_draft_pr` carries no verification evidence (#61). Our own oracle caught it. Fixing the oracle surfaced two of its own defects, fixed in PR #60 with the "not goal-post-moving" check preserved: still 3/6 red on `main` afterwards |
+| Rework | Dispatched **through the factory** rather than hand-edited, to exercise the update path: same issue, same branch, `--force-with-lease` head replacement `db2f44c → 1495b0a`, PR #59 continued instead of a new PR. Oracle 6/6, `npm test` exit 0 (76 assertions) |
+| Merge | Human merged #59. Drydock's `main` now contains code its own pipeline wrote and reviewed |
+
+Worth recording that the rework was **better** than the first attempt, not merely correct: the second pass extracted `refusedOversized()` and `readBoundedBody()` where the first had in-line duplication. A human review comment routed back through the issue body is a cheap way to get a second look from a model that has already read the code once.
+
+Three things this does **not** establish: (1) it is one task, not a rate; (2) drydock is its own graded repo with zero required approving reviews, so the human gate is one click on one's own PR — the controls that make that acceptable are capability removal and path scope, not review depth; (3) webhook-driven self-work is still unexercised end to end (§5.18).
+
+### 5.17 Phase 6 token accounting: spend is durable, so runs are measurable after the fact (2026-10-31)
+
+Until now "tokens per issue" came from numbers transcribed off a live run. The durable store has always recorded it — `pi.usage` is a per-conversation document (`UsageState`: buckets keyed `provider/modelId`, plus tool buckets) — and nobody read it. `gates/usage.ts` reads it, `gates/m5-token-report.mjs` prints it for any instance root or store path, and G2 now reports tokens per issue next to wall time.
+
+The storage detail that decided the implementation: `documents.record` holds only doc metadata; the state lives in `document_revisions.content`, where most rows are `base` but the core also writes compact `delta` rows in a patch DSL. The reader takes the newest base and marks the conversation `approximate: true` when a newer revision exists. Under-reporting a cost number silently is worse than flagging it. No dollar column on purpose: this endpoint reports zero for every cost field, so tokens are all we can attest to.
+
+Measured, from the stores of real runs (all `aurora/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF`, §5.15 pin):
+
+| Run | root | worker conv | reviewer conv | total tokens | of which cacheRead |
+|---|---|---|---|---|---|
+| self-work attempt 1 (#57) | 4,340 | 254,179 | 67,648 | **326,167** | 276,264 (85%) |
+| self-work rework (#57) | 9,322 | 378,195 | 79,587 | **467,104** | 411,131 (88%) |
+| fixture-1 gate run | 2,977 | 131,924 | 25,932 | **160,833** | 137,313 (85%) |
+| fixture-2 gate run | 11,864 | 171,701 + 34,574 | 19,900 | **238,039** | 185,492 (78%) |
+
+What the numbers say:
+
+- **Cache reads dominate every run (78–88%).** Context re-sends, not generation, are the scaling term. Non-cached input+output is roughly 25K–56K per run — an order of magnitude smaller than the headline figure, which is why a single "tokens/issue" number without the split misleads.
+- **The worker conversation is ~78–81% of a run**; orchestrator overhead is small (4K–12K), and review costs about a quarter of implementation.
+- **Rework cost 43% more than the first attempt** (467K vs 326K) despite being a smaller change: the worker ran 18 generations instead of 12, re-reading context it had to reconstruct from the branch rather than from scratch. Reopening a closed task is not cheap, and that should price into "just run it again" as an answer.
+- These are per-**run** totals for single-GPU local inference; they are baselines for comparison after model or prompt changes, not costs.
+
+Limits stated plainly: no per-tool attribution (tool usage has no model identity), deltas after the newest base are disclosed rather than applied, and a run whose store is gone is unrecoverable — which is exactly why accounting moved to the durable document instead of an attached SSE reader.
+
+### 5.18 Pending register (2026-10-31): what is left, and who/what unblocks it
+
+Issue #30 (migration onto the engram core) closed: Phases 0–3 are done with evidence, `poc/` is gone, production runs on `createCoreInstance`, and N2 re-ran the full battery afterwards. What remains is below; rows marked **operator** need a human decision or action, everything else is buildable.
+
+| Item | State | Unblocked by |
+|---|---|---|
+| Publish the intake listener + register the webhook + smoke-test with a `build`-labeled issue | Runbook ready (`fleet/enable-self-work.md`), machine clean, funnel torn down | **operator**: choose a transport; nothing in drydock assumes one |
+| #69 adapter caches routes at process start | Real bug found during bring-up: the listener validated against a stale route set. Restart discipline documented until fixed | code — write routes before spawning, detect drift per request, reload-or-exit |
+| #61 `open_draft_pr` carries no verification evidence | Demonstrated harmful in §5.16: a PR asserting "tests pass" with a crashing suite | code — run the command, attach exit code, refuse without it |
+| #62 no CI job | `gh pr checks` shows only GitGuardian; the suite runs nowhere automatically | code — Actions workflow, recursive submodules, mutating gates excluded |
+| Credential scoping: single-repo fine-grained PAT | Current effective credential is account-wide. **New finding, filed as #70:** with `FACTORY_GITHUB_TOKEN` unset, clone/push silently fall back to the machine's keychain helper (`credential.helper=osxkeychain` from the Xcode system gitconfig) — verified by cloning a private repo with no token in the environment | **operator** to cut the token; #70 for the code that should refuse instead of silently downgrading |
+| §3.9 T1 partial-run recovery (resume/requeue) | Was parked "until after migration"; migration is closed, so it is live backlog | design decision on resume semantics |
+| fixture-1 #45 (`probe:list-sort-amount`) | Last live target across both fixtures; oracles hold green on `main` elsewhere | inference time — exercises G2/G4 with every change in this session applied |
+| G3's positive control reviewed nothing | **Fixed here.** It named `agent/issue-1` literally; after that merged, the reviewer's `origin/main...HEAD` diff was empty and the control passed on nothing. Re-seeded as a good twin of trap #4 (`agent/issue-4-seeded-good`, own suite green before push). G3 re-run: T1 fail-with-root-cause 48s, T2 pass 42s | — |
