@@ -1,0 +1,60 @@
+# CI for lalanikarim/drydock (public repo — unlimited Linux-hosted minutes).
+#
+# Scope decision (2026-10-31, supersedes C2 "no Actions"): this workflow is the gate that
+# replaces manual test runs before merge. It runs ONLY what is hermetic:
+#   - unit suite (npm test): no model endpoint, no containers, no network beyond GitHub API,
+#     and its one GitHub-touching file self-skips when `gh` is unauthenticated;
+#   - the kernel pin integrity check below.
+# Deliberately excluded:
+#   - factory/test:boot — needs a live inference endpoint (OPENAI_BASE_URL) and a local
+#     sandbox image + container runtime; those are host resources, not CI resources;
+#   - gates/* — G1/G4 mutate fixture repos and burn inference; running them unattended in CI
+#     is exactly the accident they exist to prevent.
+# Node: engines floor is >=22.19.0; --experimental-strip-types works on 22.x.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Job id doubles as the branch-protection check name: "unit-suite".
+  unit-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Pin integrity (C2's surviving sub-choice): the tests below execute VENDOR code imported by
+      # relative path, so which kernel they run against is whatever this checkout carries. Log it,
+      # and fail if the checked-out submodule sha differs from the gitlink recorded in HEAD —
+      # that is drift, and a green suite on the wrong kernel would be the worst kind of false pass.
+      - name: Kernel pin check
+        run: |
+          set -euo pipefail
+          git submodule status
+          checked_out=$(git rev-parse vendor/engram)
+          recorded=$(git ls-tree HEAD vendor/engram | awk '{print $3}')
+          tag=$(git -C vendor/engram describe --tags --always 2>/dev/null || echo "no-tag")
+          echo "::notice::tests run against engram ${checked_out} (${tag})"
+          if [ "$checked_out" != "$recorded" ]; then
+            echo "::error::submodule drift: checked out ${checked_out}, gitlink records ${recorded}"
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit suite
+        run: npm test
