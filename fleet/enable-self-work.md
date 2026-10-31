@@ -2,6 +2,8 @@
 
 Date: 2026-10-31. Everything below is the remaining deployment path; the code side is finished and verified on `main`.
 
+**Transport is deliberately not part of this design.** The factory listens on `127.0.0.1` and knows nothing about how a request reached it. Anything that gives GitHub an HTTPS URL whose requests arrive at that socket is acceptable — reverse proxy, hosted tunnel, cloud load balancer, tailnet funnel. Nothing here names or recommends one, because a runbook that hardcodes a transport quietly turns an operator choice into an architectural dependency, and the security properties below have to hold regardless of which one is picked.
+
 ## Prerequisites
 
 | Item | Status | Evidence |
@@ -12,11 +14,9 @@ Date: 2026-10-31. Everything below is the remaining deployment path; the code si
 | Path scope excludes `gates/`; `gates/probes/` protected | done | registry + `test/path-scope.test.mjs` |
 | `/health` discloses nothing; bodies capped at 1 MiB | done | #59 — oracle `gates/self-intake-hardening.mjs` 6/6 on `main`, G0 20/20, `npm test` exit 0 |
 
-What is **not** done is the part only a person can do: publish the listener and register the webhook. Two decisions are still open — which machine runs the supervisor (needs node 22+, the sandbox image, tailscale, and a checkout with submodules), and whether to move off the account-wide `gh` token before exposing anything (recommended; see #62 notes on token scope).
-
 ## 1. Fleet file (deployment, not checked in)
 
-Create `fleet/fleet.local.json` (name it so; only `fleet/data/` is gitignored, so a checked-in-looking `fleet.json` tempts someone to paste a secret into it). Keep the real secret in the environment — the supervisor reads `GITHUB_WEBHOOK_SECRET_<owner>_<repo>` in preference to the file — and copy the shape from `fleet/fleet.example.json`:
+Create `fleet/fleet.local.json`. Keep the real secret in the environment — the supervisor prefers `GITHUB_WEBHOOK_SECRET_<owner>_<repo>` over the file value — and copy the shape from `fleet/fleet.example.json`:
 
 ```json
 {
@@ -24,7 +24,7 @@ Create `fleet/fleet.local.json` (name it so; only `fleet/data/` is gitignored, s
   "factories": [
     {
       "repo": "lalanikarim/drydock",
-      "secret": "use-env-override-instead",
+      "secret": "placeholder-read-from-env",
       "config": "../factory/config/lalanikarim_drydock.json",
       "instancesRoot": "../factory-instances",
       "allowedSenders": ["lalanikarim"]
@@ -33,52 +33,73 @@ Create `fleet/fleet.local.json` (name it so; only `fleet/data/` is gitignored, s
 }
 ```
 
-`allowedSenders` is defense in depth, not decoration: the signature proves GitHub sent the request, the sender allowlist additionally requires that the actor is you. On a public Funnel URL both are cheap and they fail differently.
+`allowedSenders` is defense in depth, not decoration: the signature proves GitHub sent the request, the sender allowlist additionally requires that the actor is you. On a published listener both are cheap and they fail differently.
 
-Required environment (`.env` at repo root is read by `factory/main.ts`; the supervisor passes it through to children): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `FACTORY_GITHUB_TOKEN`, `FACTORY_SANDBOX_IMAGE`, plus `GITHUB_WEBHOOK_SECRET_lalanikarim_drydock`.
+Required environment (`.env` at repo root is read by `factory/main.ts`; export it for the supervisor process too — see the gotcha below): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `FACTORY_GITHUB_TOKEN`, `FACTORY_SANDBOX_IMAGE`, plus `GITHUB_WEBHOOK_SECRET_lalanikarim_drydock`.
 
 ## 2. Start the supervisor
 
 ```bash
-node --experimental-strip-types fleet/supervisor.ts fleet/fleet.json
+node --experimental-strip-types fleet/supervisor.ts run fleet/fleet.local.json
 ```
 
-Expect, in order: `wrote 1 route(s) to …/data/routes.json`, then `[factory] lalanikarim/drydock ready on http://127.0.0.1:<port>/`. Readiness also runs the model-catalog self-check (#54): if the pinned model is absent from the instance's own `/models`, it exits **before** announcing ready — so "ready" means what it says.
+(`run` is a subcommand — bare `supervisor.ts <file>` prints usage and exits.) Expect, in order: the adapter listening line, then `[factory] lalanikarim/drydock ready on http://127.0.0.1:<port>/`, then `wrote 1 route(s) to …/data/routes.json`. Readiness also runs the model-catalog self-check (#54): if the pinned model is absent from the instance's own `/models` it exits **before** announcing ready, so "ready" means what it says.
 
-## 3. Publish with Funnel, then prove what it discloses
+### Gotcha found while bringing this up: stale routes in a running adapter
 
-Funnel forwards to the loopback listener; nothing in the factory binds a public interface (the intake server refuses non-loopback without a secret, and we keep it that way).
+The adapter reads its routes file when it starts; the supervisor writes that file when factories come up. On a machine that previously ran a different fleet, the adapter boots against the **leftover** file and logs the old repositories — then the supervisor overwrites the file underneath it and nothing reloads. Observed on first bring-up:
+
+```
+[adapter] adapter listening on http://127.0.0.1:9700 (routes: lalanikarim/factory-fixture, lalanikarim/factory-fixture-2)
+[supervisor] wrote 1 route(s) to /Users/…/fleet/data/routes.json
+```
+
+The listener was therefore validating signatures against routes that no longer described what should be running, and a correctly signed drydock delivery would have been refused as an unknown repo. Until this is fixed in code: **after any fleet or registry change, restart the supervisor and read the adapter's startup line** — it must list exactly the repos you expect. A signed probe with a deliberately ineligible label is the cheap confirmation (unknown-repo and not-eligible are different refusals).
+
+## 3. Publish the listener, then prove what it discloses
+
+Requirements on whatever sits in front — these follow from how the intake server works, not from any particular product:
+
+- **TLS terminated publicly**, forwarding to `127.0.0.1:9700`. The factory itself must never bind a public interface; the intake server refuses non-loopback binds without a secret and that should stay true.
+- **Request body forwarded unmodified.** Signature verification is an HMAC over the exact bytes GitHub sent; a proxy that rewrites, pretty-prints, or reorders JSON produces valid-looking requests that all fail with `invalid signature`.
+- **`POST /webhook/github` reachable**, method preserved, request body not buffered beyond the 1 MiB cap (a proxy-side cap set lower than GitHub's payloads silently drops work; set higher and our own cap does the refusing).
+- **4xx responses passed through**, so GitHub's delivery log shows real outcomes instead of a proxy-generated 200.
+
+Then verify from outside your own process:
 
 ```bash
-# Exact syntax varies by tailscale version (serve vs funnel subcommands); the requirement is only that
-# 443 on the funnel host proxies to 127.0.0.1:9700 and nothing else does.
-tailscale serve --bg --https=443 http://127.0.0.1:9700
-curl -s https://<your-funnel-host>/health                # must print {"status":"ok"} and NOTHING else
+curl -s https://<your-public-endpoint>/health     # must print {"status":"ok"} and NOTHING else
 ```
 
-That curl is the acceptance test for #57 in production: before it, the same request enumerated every configured repository. There is no auth on `/health` by design — liveness has to be pollable — which is exactly why it must say nothing.
+That is the production acceptance test for #57: before the fix the same request enumerated every configured repository. `/health` has no auth by design — liveness must be pollable — which is exactly why it says nothing.
+
+One caveat when testing from the machine that hosts the listener: traffic to your own published hostname may be hairpinned through the provider's edge or even resolved onto the private network, so intermittent TLS resets or HTTP/2 failures there say more about the test path than the server (loopback was consistently 200 in exactly that situation). Two answers that don't depend on local quirks: the adapter's own log (`fleet/data/intake-adapter.jsonl` records every inbound request and its refusal reason), and GitHub's delivery log, since GitHub connects from the public internet:
+
+```bash
+gh api repos/lalanikarim/drydock/hooks/<hook-id>/deliveries --jq '.[0] | {delivered_at, code, event}'
+```
 
 ## 4. Register the webhook
 
-Events: **issues** only (that is all intake consumes; more events cost signature work and log volume for nothing). Secret must match `GITHUB_WEBHOOK_SECRET_lalanikarim_drydock`.
+Events: **issues** only (all intake consumes; more events cost signature work and log volume for nothing). Secret must match `GITHUB_WEBHOOK_SECRET_lalanikarim_drydock`.
 
 ```bash
 gh api repos/lalanikarim/drydock/hooks -f active=true \
   -f "events[]=issues" -H "Accept: application/vnd.github+json" \
-  -f config[url]=https://<your-funnel-host>/webhook/github \
+  -f config[url]=https://<your-public-endpoint>/webhook/github \
   -f config[content_type]=json -f config[secret]=<same-secret> -f config[insecure_ssl]=0
 ```
 
 ## 5. Smoke test, and what a failure looks like
 
-Pick or create an issue that is genuinely worth doing, then:
+Pick or create an issue genuinely worth doing, then:
 
 ```bash
 gh issue edit <n> -R lalanikarim/drydock --add-label build
-tail -f fleet/data/intake-adapter.jsonl      # one dispatch line per accepted event
+tail -f fleet/data/intake-adapter.jsonl      # one line per inbound event, with reason on refusal
 ```
 
-Dispatch → worker clones, runs `npm ci`, implements, gets independently reviewed → **draft PR**, and it stops there. A rejected event (wrong label, bad signature, cross-repo naming) is logged with a reason and returns 200/403 respectively; GitHub retries 5xx, so an instance that is down does not silently lose work — `requestId = issue-<n>` makes the redelivery idempotent.
+Dispatch → worker clones, runs `npm ci`, implements, is independently reviewed → **draft PR**, and it stops there. A rejected event (wrong label, bad signature, cross-repo naming) is logged with a reason; GitHub retries 5xx, so an instance that is down does not silently lose work — `requestId = issue-<n>` makes the redelivery idempotent.
 
 Two operational facts worth remembering: re-labeling an issue **cannot** re-run it (same `requestId`, permanently deduplicated in the durable store — use a fresh issue or a manual `POST /tasks`), and removing the eligibility label after merge is still manual, as it is for the fixtures.
 
@@ -86,7 +107,7 @@ Two operational facts worth remembering: re-labeling an issue **cannot** re-run 
 
 ```bash
 gh api -X PATCH repos/lalanikarim/drydock/hooks/<hook-id> -f active=false   # stop intake at the source
-tailscale serve remove 443        # or `tailscale funnel --reset`, depending on how it was published
+# then unpublish/stop whatever forwards to 127.0.0.1:9700, per that tool's own commands
 ```
 
-Disabling self-work entirely is one line in the registry (`enabled: false`), which the supervisor and `factory/main.ts` both enforce before any child spawns — that path was demonstrated live when the first self-run refused to start.
+Disabling self-work entirely is one line in the registry (`enabled: false`), which both the supervisor and `factory/main.ts` enforce before any child spawns — demonstrated live when the first self-run refused to start.
