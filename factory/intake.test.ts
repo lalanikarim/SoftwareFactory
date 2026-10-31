@@ -2,8 +2,9 @@
 // rejection (gate M3), sender allowlist, and event filtering. No model calls.
 
 import assert from "node:assert/strict";
+import net from "node:net";
 import { createHmac } from "node:crypto";
-import { startIntakeServer, verifyGitHubSignature, isAgentIssueEvent } from "./intake.ts";
+import { startIntakeServer, verifyGitHubSignature, isAgentIssueEvent, MAX_WEBHOOK_BODY_BYTES } from "./intake.ts";
 
 const SECRET = "test-webhook-secret";
 
@@ -161,6 +162,112 @@ const issueEvent = (repo: string, opts: { action?: string; labels?: string[]; se
     /refusing to bind/,
     "non-loopback without secret must refuse to start",
   );
+}
+
+// --- server: exposure hardening (issue #57) ----------------------------------
+{
+  const dispatched: string[] = [];
+  const { server, port } = await startIntakeServer({
+    port: 0,
+    host: "127.0.0.1",
+    routes: [{ repo: "alpha/one", secret: SECRET, target: "http://x/tasks", token: "t" }],
+    dispatch: async (repo: string) => { dispatched.push(repo); return { submissionId: 1 }; },
+  });
+
+  // /health stays an unauthenticated liveness probe but must not name the
+  // configured repositories (this port is public under Funnel).
+  const health = await fetch(`http://127.0.0.1:${port}/health`);
+  assert.equal(health.status, 200, "unauthenticated liveness must stay 200");
+  const healthBody = await health.text();
+  assert.ok(!healthBody.includes("alpha/one"), `/health disclosed a configured repo: ${healthBody}`);
+  assert.match(healthBody.toLowerCase(), /ok|alive|healthy|up/, `liveness payload unclear: ${healthBody}`);
+
+  // Raw-socket exchange. fetch() cannot report a status for a connection the
+  // server tears down mid-upload, so drive the socket directly. When the
+  // server refuses early, "error" and "data" race — never let an EPIPE win
+  // over a status line that already arrived, and never leave a socket error
+  // unhandled (a refused request erroring out is the expected outcome).
+  const rawExchange = (opts: { headers: string; onConnect: (sock: net.Socket, isClosed: () => boolean) => void }) =>
+    new Promise<{ status?: number; raw: string }>((resolveX) => {
+      const sock = net.connect(port, "127.0.0.1");
+      let got = "";
+      let settled = false;
+      let closed = false;
+      const statusOf = () => (got.match(/HTTP\/1\.[01] (\d{3})/) ?? [])[1];
+      const done = (r: { status?: number; raw: string }) => {
+        if (settled) return;
+        settled = true;
+        sock.destroy();
+        resolveX(r);
+      };
+      const settleIfAnswered = () => {
+        const s = statusOf();
+        if (s) done({ status: Number(s), raw: got });
+        return Boolean(s);
+      };
+      // The server may reset the socket while we are still writing; give it a
+      // beat to deliver an already-sent status line before giving up.
+      const lament = (why: string) => setTimeout(() => (settleIfAnswered() ? undefined : done({ raw: `${why}: ${got.slice(0, 200)}` })), 150);
+      sock.on("data", (d) => { got += d.toString("latin1"); settleIfAnswered(); });
+      sock.on("error", () => { closed = true; lament("socket error"); });
+      sock.on("close", () => { closed = true; lament("connection closed"); });
+      sock.on("connect", () => {
+        sock.write(`POST /webhook/github HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n${opts.headers}`);
+        opts.onConnect(sock, () => closed);
+      });
+      setTimeout(() => (settleIfAnswered() ? undefined : done({ raw: `no response within timeout: ${got.slice(0, 200)}` })), 5000);
+    });
+
+  // Declared Content-Length over the cap: the 413 must come from the headers
+  // alone — it arrives before any of the payload does.
+  {
+    const r = await rawExchange({
+      headers: `content-type: application/json\r\ncontent-length: ${MAX_WEBHOOK_BODY_BYTES + 1}\r\nx-hub-signature-256: sha256=deadbeef\r\n\r\n`,
+      onConnect: (sock) => sock.write('{"a":'),
+    });
+    assert.equal(r.status, 413, `expected 413 before the body arrives, got ${JSON.stringify(r).slice(0, 200)}`);
+    assert.equal(dispatched.length, 0, "a refused body must never be dispatched");
+  }
+
+  // Chunked stream with no Content-Length: pump frames until the server stops
+  // us. It must stop well under 2 MB (buffering would let all of it through);
+  // a status line, if one arrives, must be 413 — but an implementation that
+  // answers and then tears down is correct even if the client never sees it.
+  {
+    let written = 0;
+    const r = await rawExchange({
+      headers: "content-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n",
+      onConnect: (sock, isClosed) => {
+        const frame = Buffer.alloc(32 * 1024, 0x61);
+        const pump = () => {
+          if (isClosed() || written > 8 * 1024 * 1024) return;
+          sock.write(`${frame.length.toString(16)}\r\n`);
+          sock.write(frame, () => {
+            written += frame.length;
+            sock.write("\r\n", () => { if (!isClosed()) setImmediate(pump); });
+          });
+        };
+        pump();
+      },
+    });
+    assert.ok(written < 2 * 1024 * 1024, `server let ${written} bytes through before refusing — that is buffering, not capping`);
+    if (r.status !== undefined) assert.equal(r.status, 413, `a status line on an over-cap stream must be 413, got ${r.status}`);
+    assert.equal(dispatched.length, 0, "a cut-off stream must never be dispatched");
+  }
+
+  // Regression: a signed body comfortably under the cap still dispatches.
+  {
+    const body = Buffer.from(JSON.stringify(issueEvent("alpha/one")));
+    const res = await fetch(`http://127.0.0.1:${port}/webhook/github`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-hub-signature-256": sign(body) },
+      body: body.toString(),
+    });
+    assert.equal(res.status, 202, `expected 202 under the cap, got ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    assert.deepEqual(dispatched, ["alpha/one"]);
+  }
+
+  server.close();
 }
 
 console.log("intake (TS port): all checks passed");
