@@ -54,15 +54,21 @@ B1 and B3 could read as contradictory. Reading: PAT = today's credential with a 
 
 Strongest option chosen: no PR without a passing verification run, exit code attached as evidence. Directly prevents the §5.16 failure (a PR body asserting "tests pass" over a crashing `npm test`).
 
-### C2 — No GitHub Actions. All tests local only. · **adopted-with-risk**
+### C2 — No GitHub Actions. All tests local only. · **superseded 2026-10-31 (same day) by C2-rev**
 
-Budget decision; recorded verbatim: *"No github actions. we don't have the budget. all tests local only."* The selected sub-option (`submodule_pin`) survives as a **local** check — verify the `vendor/engram` pin resolves and builds — not a workflow. #62 should be closed as won't-do and replaced by the local verification gate.
+Budget decision; recorded verbatim: *"No github actions. we don't have the budget. all tests local only."* Recorded at the time with a factual note: `lalanikarim/drydock` is a **public** repo, where GitHub provides unlimited Linux-hosted Actions minutes (private repos get 2,000/month; both fixtures are private) — so if "no budget" refers to runner cost specifically, that constraint does not apply to drydock itself.
 
-Factual note, not an argument: `lalanikarim/drydock` is a **public** repo, where GitHub provides unlimited Linux-hosted Actions minutes (private repos get 2,000/month; both fixtures are private). If "no budget" refers to runner cost specifically, that constraint may not apply to drydock itself. Either way the decision stands as recorded — local-only also keeps the mutating gates out of any automated path by construction.
+### C2-rev — CI gate: hermetic unit suite + kernel pin check · **adopted**
 
-### I3 — interpretation: #61 becomes the gate that CI would have been · **interpretation**
+Operator re-decision after the note above: *"let's reconsider CI. if it is free, then let's add that as a gate."* `.github/workflows/ci.yml` runs on push to `main` and every PR: recursive submodule checkout → **pin integrity check** (logs which engram sha the suite actually ran against; fails if the checked-out submodule differs from the gitlink in HEAD) → `npm ci && npm test`.
 
-With C2 (no CI) and E3 (0 required approving reviews), `open_draft_pr`'s verification evidence is the only automatic control before a human clicks merge. That makes C1 mandatory rather than nice-to-have, and it means a repo without a test command cannot produce PRs at all unless we add an explicit escape hatch per repo config.
+Scope is deliberately hermetic, and C2's surviving sub-choice carries over: `submodule_pin` became the pin integrity step. Still excluded, for reasons that don't change with free minutes: `test:boot` needs a live inference endpoint + local sandbox image (host resources), and `gates/*` mutate fixture repos and burn inference — running them unattended is exactly the accident they prevent. First run failed on a git quirk (`git rev-parse vendor/engram` echoes the path instead of resolving the gitlink from the superproject); fixed to read the sha from inside the submodule. Second run: **green**, pin check reporting engram `a764e36` (v0.2.0).
+
+**Remaining step (operator):** add check name `unit-suite` as a required status check on `main` in branch protection. Until then it is advisory — visible but not blocking.
+
+### I3 — interpretation: #61 becomes the gate that CI would have been · **interpretation (weakened by C2-rev)**
+
+Under C2, `open_draft_pr`'s verification evidence was the *only* automatic control before a human clicks merge. Under C2-rev it is still the only **pre-push** control — CI runs on every draft PR head, so by review time its status is visible, but nothing prevents pushing broken code in the first place. C1 stays mandatory; a repo without a test command cannot produce PRs unless we add an explicit escape hatch per repo config.
 
 ### R1 — risk: no CI + zero required reviews · **open**
 
@@ -166,7 +172,7 @@ Concrete enough to check against `research/work-queue.md`: every in-flight item 
 
 | # | Risk | In force because | Mitigation / trigger to revisit |
 |---|---|---|---|
-| R1 | No CI and 0 required approving reviews: nothing external re-runs tests after a draft PR exists | C2 + E3 | C1 makes `open_draft_pr` run the suite and refuse on non-zero; revisit when #68 lands |
+| R1 | ~~No CI~~ and 0 required approving reviews: nothing *required* re-runs tests after a draft PR exists | C2-rev + E3 | **Mostly closed by C2-rev**: CI runs on every draft PR head. Residual gap until the operator makes `unit-suite` a required status check (advisory today); C1 still covers the pre-push path |
 | R2 | Self-work can edit `AGENTS.md`, the file that constrains it | E1 | Recommend moving it to `protectedPaths`; human merge is currently the only control |
 | R3 | Public listener (Funnel) on a laptop holding an account-wide credential | A1 + A2, credential status today | B1 PAT is a **prerequisite** for publishing, not a follow-up; funnel URL is revocable; `allowedSenders` stays on |
 | R4 | Stale policy accepted between fleet change and restart | #69 open | C3 removes it; until then the runbook's restart-and-read-the-startup-line step is mandatory |
