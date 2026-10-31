@@ -18,6 +18,18 @@ import { dirname } from "node:path";
 export const AGENT_LABEL = "agent";
 
 /**
+ * Maximum accepted webhook request body, in bytes (1 MiB).
+ *
+ * GitHub issue webhook payloads are bounded well under a megabyte, so there is
+ * no legitimate reason to accept larger bodies. Anything over this cap is
+ * refused with HTTP 413 BEFORE it is buffered, parsed, or signature-checked —
+ * an anonymous caller must not be able to control how much memory one in-flight
+ * request allocates (the listener is exposed via Tailscale Funnel, i.e. the
+ * public internet, with no other filter in front).
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
+/**
  * True for events that should start (or re-submit) factory work.
  *
  * `eligibilityLabel` comes from the repo registry (§5.11); it defaults to "agent" only for callers
@@ -142,6 +154,34 @@ export function loadRoutes(path: string): Route[] {
 }
 
 /**
+ * Read a request body up to `cap` bytes. Resolves `{ tooLarge: true }`
+ * (without buffering) as soon as the running size passes the cap; the caller
+ * refuses with 413 and destroys the connection rather than reading the rest.
+ */
+function readBoundedBody(req: http.IncomingMessage, cap: number): Promise<{ body?: Buffer; tooLarge: boolean }> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const settle = (v: { body?: Buffer; tooLarge: boolean }) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > cap) {
+        settle({ tooLarge: true }); // stop buffering; caller refuses and tears down
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => settle({ body: Buffer.concat(chunks), tooLarge: false }));
+    req.on("error", () => settle({ body: Buffer.concat(chunks), tooLarge: false }));
+  });
+}
+
+/**
  * Start the intake HTTP server. POST /webhook/github accepts GitHub issue
  * events (X-GitHub-Event: issues). Each event is appended to logPath as a
  * JSONL audit line so intake is replayable.
@@ -152,6 +192,13 @@ export function loadRoutes(path: string): Route[] {
  *     injection surface: anyone could submit arbitrary "work" content).
  *   - When webhookSecret is set, every request must carry a valid
  *     X-Hub-Signature-256 or it is rejected with 403 before parsing.
+ *   - Bodies over MAX_WEBHOOK_BODY_BYTES are rejected with 413 before any
+ *     buffering/parsing: an over-cap declared Content-Length is answered from
+ *     the headers alone, and a stream (chunked) stops being buffered once its
+ *     running size passes the cap. The connection is destroyed after the 413
+ *     flushes so the caller cannot keep sending.
+ *   - GET /health reports liveness only — it must not name configured
+ *     repositories to anonymous callers on a public (Funnel) URL.
  *   - Loopback without a secret is local-development mode only (the G0
  *     battery); it is never acceptable for a reachable endpoint.
  *
@@ -181,16 +228,42 @@ export function startIntakeServer({ port = 0, host = "127.0.0.1", webhookSecret,
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/health") {
+        // Liveness only. This endpoint is unauthenticated and public under
+        // Funnel: naming configured repositories here would disclose private
+        // repo names to strangers.
         res.writeHead(200, { "content-type": "application/json" });
-        return res.end(JSON.stringify({ status: "ok", routes: routes ? routes.map((r) => r.repo) : null }));
+        return res.end(JSON.stringify({ status: "ok" }));
       }
       if (req.method !== "POST" || url.pathname !== "/webhook/github") {
         res.writeHead(404, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "not found" }));
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
-      const rawBody = Buffer.concat(chunks);
+
+      // Body cap, enforced BEFORE buffering/parsing/signature. Refuse and then
+      // destroy the connection after the 413 flushes, so the caller is stopped
+      // mid-upload instead of being allowed to keep streaming.
+      const refuseOversized = () => {
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `request body exceeds ${MAX_WEBHOOK_BODY_BYTES} bytes` }));
+        if (res.writableFinished) req.destroy();
+        else res.once("finish", () => req.destroy());
+      };
+
+      // Declared length: answer from the headers alone, without touching the payload.
+      const declaredLength = Number(req.headers["content-length"]);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
+        refuseOversized();
+        return;
+      }
+
+      // Streamed bodies (chunked, or a lying Content-Length): stop buffering
+      // once the running size passes the cap.
+      const readResult = await readBoundedBody(req, MAX_WEBHOOK_BODY_BYTES);
+      if (readResult.tooLarge) {
+        refuseOversized();
+        return;
+      }
+      const rawBody = readResult.body;
 
       // Signature check happens BEFORE parsing: an unauthenticated body must
       // never reach dispatch, even as data.
