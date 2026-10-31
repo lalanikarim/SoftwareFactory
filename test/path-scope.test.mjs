@@ -119,10 +119,29 @@ test("the real registry scopes: fixtures to src|test|README, drydock to its own 
   assert.deepEqual(fx1.allowlist, ["src/", "test/", "README.md"]);
 
   const drydock = entryOrThrow("lalanikarim/drydock");
-  // A self-run may edit factory/gates/test code and the research docs…
+  // A self-run may edit factory/fleet code, its own tests, and the research docs…
   assert.equal(checkPathScope(["factory/worker.ts", "test/x.test.mjs", "research/multi-repo-factory-plan.md"], drydock).ok, true);
   // …but not the vendored kernel, not its own dependencies, and not repo governance files.
   for (const forbidden of ["vendor/engram", "package.json", "package-lock.json", "AGENTS.md", ".github/workflows/ci.yml"]) {
     assert.equal(checkPathScope([forbidden], drydock).ok, false, `${forbidden} must be off-limits to a drydock self-run`);
   }
+
+  // Self-grading: `gates/` is deliberately outside drydock's allowlist. For a fixture repo the gates
+  // being editable would not matter — G2 runs from outside the graded repo. Drydock IS its own graded
+  // repo, so a diff that softened an oracle would be judged by the thing it softened.
+  for (const forbidden of ["gates/g2-worker-quality.mjs", "gates/probes/list-total-count.mjs", "gates/lib.ts"]) {
+    assert.equal(checkPathScope([forbidden], drydock).ok, false, `${forbidden} must be off-limits to a drydock self-run`);
+  }
+  // And the probes stay protected even if someone widens the allowlist back to gates/ later: that is
+  // what declaring them in `protectedPaths` buys, and it is why both mechanisms exist.
+  assert.equal(
+    checkPathScope(["gates/g2-worker-quality.mjs"], { allowlist: ["gates/"], protectedPaths: ["gates/probes/"] }).ok,
+    true,
+    "a widened allowlist may still let harness code through…",
+  );
+  assert.equal(
+    checkPathScope(["gates/probes/list-total-count.mjs"], { allowlist: ["gates/"], protectedPaths: ["gates/probes/"] }).ok,
+    false,
+    "…but never the oracles themselves",
+  );
 });

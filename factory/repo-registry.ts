@@ -68,7 +68,11 @@ export interface RepoEntry {
    * disabled entry (enabling a repo without runtime config is a validation error). */
   configFile: string | null;
   oracleBoot: OracleBoot | null;
-  /** Prefixes a pipeline run may change; null = any non-protected path. See factory/path-scope.ts. */
+  /**
+   * Prefixes a pipeline run may change; null = any non-protected path. See factory/path-scope.ts.
+   * A repo holding its own grading code must leave that code out: drydock omits `gates/` so a
+   * self-run cannot edit the oracles that judge it. Narrowing here is policy, not preference.
+   */
   pathAllowlist: string[] | null;
   /** Never-change prefixes in addition to the unconditional `vendor/` protection. */
   protectedPaths: string[];
