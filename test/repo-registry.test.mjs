@@ -126,12 +126,18 @@ test("factory/repo-registry.json loads and describes the expected registry", () 
   assert.equal(fx2.oracleBoot.portFrom, "env", "fixture-2 takes PORT and logs the requested value");
 });
 
-test("drydock is registered but neither enabled nor auto-mergeable", () => {
+test("drydock is enabled for self-work and can never auto-merge", () => {
   const raw = JSON.parse(readFileSync(join(ROOT, "factory/repo-registry.json"), "utf8"));
   const drydock = raw.repos.find((r) => r.repo === "lalanikarim/drydock");
-  assert.equal(drydock.enabled, false, "no intake adapter yet — enabling it starts the factory on its own repo");
+  assert.equal(drydock.enabled, true, "self-work is enabled: local, human-dispatched runs only (no fleet entry, no published listener)");
+  // The invariant that replaced "disabled" as the safety story. autoMerge:false is what removes
+  // merge_pr from the tool list entirely (test/repo-enforcement.test.mjs), so a self-run cannot land
+  // anything in the repo holding the research record even if every other control were bypassed.
   assert.equal(drydock.autoMerge, false, "the factory must never merge into the repo holding the research record");
   assert.notEqual(drydock.eligibilityLabel, "agent", "drydock's own backlog is not factory work by default");
+  // Self-grading: the oracles live under gates/, which a self-run must not be able to edit.
+  assert.ok(!drydock.pathAllowlist.includes("gates/"), "a self-run may not edit the gates that judge it");
+  assert.ok(drydock.protectedPaths.includes("gates/probes/"), "the oracles stay protected even if gates/ were ever allowlisted");
 });
 
 test("every registry entry's runtime config parses, including disabled repos", () => {

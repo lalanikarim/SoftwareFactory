@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { factoryPipeline, orchestratorInstructions, ORCHESTRATOR_INSTRUCTIONS } from "../factory/pipeline.ts";
@@ -61,12 +61,34 @@ test("the prompt cannot drift from the capability", () => {
 });
 
 test("the supervisor refuses to run a factory the registry does not allow", () => {
-  // Registered + enabled: fine.
-  checkRegistryPolicy(["lalanikarim/factory-fixture", "lalanikarim/factory-fixture-2"]);
-  // Registered but disabled — drydock's own entry exists to say "not yet".
-  assert.throws(() => checkRegistryPolicy(["lalanikarim/drydock"]), /lalanikarim\/drydock is in the repo registry but disabled/);
+  // Registered + enabled: fine. drydock is here too now that self-work is enabled (§5.12); what still
+  // stops it from merging is capability removal, asserted above.
+  checkRegistryPolicy(["lalanikarim/factory-fixture", "lalanikarim/factory-fixture-2", "lalanikarim/drydock"]);
   // Not registered at all: message lists what IS allowed.
   assert.throws(() => checkRegistryPolicy(["someone/random"]), /someone\/random is not in the repo registry \(known:/);
+});
+
+test("a disabled entry still refuses to start, whatever the production registry happens to say", () => {
+  // This used to lean on drydock's own entry being disabled. That was a test coupled to a policy
+  // decision: flipping the decision broke the test, and worse, deleting the test would have hidden
+  // the enforcement. Now the disabled repo is synthetic, so the mechanism is pinned independently of
+  // which repos we currently allow.
+  // loadRegistry resolves configFile against <dirname(registry)>/.., because a real registry lives at
+  // <root>/factory/repo-registry.json — so the fake has to sit in that layout, not just anywhere.
+  mkdirSync(join(workDir, "factory", "config"), { recursive: true });
+  writeFileSync(join(workDir, "factory", "config", "allowed_one.json"), JSON.stringify({ repo: "allowed/one", testCommand: "true" }));
+  const file = join(workDir, "factory", "repo-registry.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      repos: [
+        { repo: "allowed/one", enabled: true, autoMerge: false, configFile: "factory/config/allowed_one.json" },
+        { repo: "paused/two", enabled: false, autoMerge: false, note: "registered but not running" },
+      ],
+    }),
+  );
+  checkRegistryPolicy(["allowed/one"], file);
+  assert.throws(() => checkRegistryPolicy(["paused/two"], file), /paused\/two is in the repo registry but disabled/);
   // One bad entry poisons the batch (fail before any child spawns, not after).
-  assert.throws(() => checkRegistryPolicy(["lalanikarim/factory-fixture", "lalanikarim/drydock"]), /disabled/);
+  assert.throws(() => checkRegistryPolicy(["allowed/one", "paused/two"], file), /disabled/);
 });

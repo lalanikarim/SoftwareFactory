@@ -30,13 +30,13 @@
     },
     {
       "repo": "lalanikarim/drydock",
-      "enabled": false,
+      "enabled": true,
       "autoMerge": false,
       "configFile": "factory/config/lalanikarim_drydock.json",
       "pathAllowlist": ["factory/", "fleet/", "test/", "research/"],
       "protectedPaths": ["gates/probes/"],
       "eligibilityLabel": "build",
-      "note": "N3 dogfood target. Disabled: no deployment fleet file or GitHub webhook for this repo yet, so nothing should be running a factory here. autoMerge is false permanently — drydock runs would stop at the draft PR for a human to merge (§5.11)."
+      "note": "N3 dogfood target, enabled for LOCAL human-dispatched self-work only: there is no fleet entry and no published webhook listener, so nothing starts a factory here by itself; runs are started deliberately (gates/self-run-task.mjs) against this checkout. autoMerge is false permanently — drydock runs stop at the draft PR for a human to merge (§5.11). pathAllowlist deliberately excludes gates/ so a self-run cannot edit the oracles that judge it, and gates/probes/ is additionally protected."
     }
   ]
 }
