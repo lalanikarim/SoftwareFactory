@@ -23,6 +23,7 @@
 // Usage: node --experimental-strip-types gates/self-intake-hardening.mjs [workspaceDir]
 
 import assert from "node:assert/strict";
+import net from "node:net";
 import { createHmac } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
@@ -74,17 +75,105 @@ await check("GET /health still reports liveness", async () => {
 });
 
 // --- 2. oversized bodies refused before buffering ---------------------------------------------------
-await check("oversized POST is refused with 413 (not buffered and parsed)", async () => {
-  // 3 MB of JSON-ish bytes. Today this is accumulated in full before the signature header is read.
-  const big = Buffer.alloc(3 * 1024 * 1024, 0x61); // 'a' — invalid JSON on purpose
-  const res = await postRaw(big, { "content-type": "application/json", "x-hub-signature-256": "sha256=deadbeef" });
-  assert.equal(res.status, 413, `expected 413 for an oversized body, got ${res.status}`);
+// These two checks drive a RAW socket on purpose. The first version of them used fetch() with a full
+// 3 MB body and asserted `res.status === 413` — which cannot work against a server that behaves the way
+// the criteria ask it to: refusing early means tearing the connection down mid-upload, and undici reports
+// that as "fetch failed" instead of surfacing the status. In other words the oracle contradicted its own
+// requirement ("stopping the connection early is preferred over reading-then-refusing") and would have
+// punished the better implementation. The raw form is also a STRONGER claim than the one it replaces:
+// the client never sends the payload, so a 413 can only arrive if refusal happened before buffering.
+function rawExchange(port, { headers, onConnect, timeoutMs = 8000 }) {
+  return new Promise((resolveExchange) => {
+    const sock = net.connect(port, "127.0.0.1");
+    let got = "";
+    let settled = false;
+    let closed = false;
+    const statusOf = () => (got.match(/HTTP\/1\.[01] (\d{3})/) ?? [])[1];
+    const done = (r) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolveExchange(r);
+    };
+    // A server that refuses early tears the connection down while we are still writing, so "error" and
+    // "data" race. Never let an EPIPE win over a status line that already arrived — that would make the
+    // oracle fail on the behavior it is asking for.
+    const settleIfAnswered = () => {
+      const s = statusOf();
+      if (s) done({ status: Number(s), raw: got });
+      return Boolean(s);
+    };
+    sock.on("data", (d) => {
+      got += d.toString("latin1");
+      settleIfAnswered();
+    });
+    const lament = (why) => setTimeout(() => (settleIfAnswered() ? undefined : done({ error: why, raw: got.slice(0, 200) })), 150);
+    sock.on("error", (e) => {
+      closed = true;
+      lament(`socket error: ${e.message}`);
+    });
+    sock.on("close", () => {
+      closed = true;
+      lament("connection closed");
+    });
+    sock.on("connect", () => {
+      sock.write(`POST /webhook/github HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n${headers}`);
+      onConnect(sock, () => closed);
+    });
+    setTimeout(() => (settleIfAnswered() ? undefined : done({ error: `no response within ${timeoutMs}ms`, raw: got.slice(0, 200) })), timeoutMs);
+  });
+}
+
+await check("over-cap Content-Length is refused with 413 before any payload is sent", async () => {
+  const before = dispatched.length;
+  // Announce 3 MB, send 5 bytes. A server that buffers-then-checks has nothing to answer yet.
+  const r = await rawExchange(srv.port, {
+    headers: "content-type: application/json\r\ncontent-length: 3000000\r\nx-hub-signature-256: sha256=deadbeef\r\n\r\n",
+    onConnect: (sock) => sock.write('{"a":'),
+  });
+  assert.equal(r.status, 413, `expected 413 before the body arrives, got ${JSON.stringify(r).slice(0, 200)}`);
+  assert.equal(dispatched.length, before, "a refused body must never be dispatched");
 });
 
-await check("oversized POST never reaches dispatch", async () => {
+// What this check does and does not require, because it was wrong in its first draft: it used to demand
+// an observable `413` status line on the chunked path. A correct implementation may answer and then tear
+// the connection down while the client is still writing, and Node can reset the socket before the last
+// response byte lands — so demanding a visible status there penalized exactly the early-refusal behavior
+// the criteria asked for. What actually matters is that the server STOPS THE CALLER before it has finished
+// sending (that is what "not buffered" means from outside), that nothing is dispatched, and that a status
+// line, if the client is lucky enough to receive one, says 413. The declared-Content-Length check above
+// keeps the stronger requirement, because there the response always arrives.
+await check("a streamed body with no Content-Length is cut off before it finishes sending", async () => {
+  // The harder path: chunked encoding hides the size, so a cap that only reads Content-Length passes
+  // the check above and still buffers an attacker's stream. Write 64 KB frames until the server answers.
   const before = dispatched.length;
-  await postRaw(Buffer.alloc(3 * 1024 * 1024, 0x7b), { "content-type": "application/json" });
-  assert.equal(dispatched.length, before, "an oversized body must not be dispatched");
+  let written = 0;
+  const r = await rawExchange(srv.port, {
+    headers: "content-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n",
+    onConnect: (sock, isClosed) => {
+      const frame = Buffer.alloc(32 * 1024, 0x61);
+      const pump = () => {
+        // Stop politely once the server has hung up; the exchange resolves from the response side.
+        if (isClosed() || written > 8 * 1024 * 1024) return;
+        sock.write(`${frame.length.toString(16)}\r\n`, () => {});
+        sock.write(frame, () => {});
+        sock.write("\r\n", () => {
+          written += frame.length;
+          if (!isClosed()) setImmediate(pump);
+        });
+      };
+      pump();
+    },
+  });
+  const cutOffEarly = written < 2 * 1024 * 1024;
+  assert.ok(
+    cutOffEarly,
+    `the server let ${Math.round(written / 1024)} KB arrive without refusing it — that is buffering, not capping`,
+  );
+  if (r.status !== undefined) {
+    assert.equal(r.status, 413, `a status line on an over-cap stream must be 413, got ${r.status}`);
+  }
+  assert.equal(dispatched.length, before, "a cut-off stream must never be dispatched");
 });
 
 // --- 3. the working path stays working --------------------------------------------------------------
