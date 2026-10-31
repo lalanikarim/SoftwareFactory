@@ -96,8 +96,8 @@ export function buildRoutes(
  * Policy gate between the two config layers (§5.11): the fleet file says what should be RUNNING,
  * the repo registry says what is ALLOWED. Checking every fleet entry against the registry here means
  * a stale or hand-edited fleet file cannot start a factory for a repo policy does not permit —
- * unregistered, or registered but disabled (e.g. drydock itself, whose self-hosting entry exists
- * precisely to say "not yet"). Runs before any child is spawned.
+ * unregistered, or registered but disabled — a repo can be checked in with policy recorded while not
+ * being allowed to run. Runs before any child is spawned.
  */
 export function checkRegistryPolicy(repos: string[], registryPath?: string): void {
   const registry = loadRegistry(registryPath);
