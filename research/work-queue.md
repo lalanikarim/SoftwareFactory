@@ -20,7 +20,7 @@ Owner: 🤖 = buildable now, no input needed · 🧑 = needs you (credential, cl
 | # | Item | Owner | Depends on | Done when |
 |---|---|---|---|---|
 | 7 | **fixture-1 #45** (`?sort=amountCents`) through G2/G4 (D3) — the last live target in either fixture; produces a draft PR for you to merge | 🤖🧑 | aurora available (confirmed) | Merged, `agent` label removed, `probe:list-sort-amount` retained as a regression oracle |
-| 8 | **Close #62** as won't-do per C2 (no Actions); record the local verification gate that replaces it. Optional local `npm run verify` covering unit + boot + pin-resolves, including the `submodule_pin` sub-choice | 🤖🧑 | — | No open issue implies CI; the local equivalent exists and is documented |
+| 8 | **#62 → done via C2-rev.** CI workflow landed (this PR): unit suite + kernel pin check on push/PR. Close #62 with a comment citing the re-decision. **Remaining: operator adds `unit-suite` as a required status check on `main`** — until then it is advisory | 🤖🧑 | this PR merged | Check appears green on every draft PR and blocks merges when red |
 | 9 | **#41 upstream PR** against engram for the two destructive-guard narrowings (interpreter heads, `/dev` redirection drop); link from drydock #41 / engram#63 (D4). No pin change until it lands and passes the battery | 🤖 | — | Upstream PR open with our characterization test as evidence |
 | 10 | **§3.9 T1 partial-run recovery**: preserve branch, mark resumable, requeue once with the diff as context (C4) | 🤖 | 4 | A budget-aborted run leaves recoverable work and one automatic resume attempt, tested |
 | 11 | **E4 token annotation**: attach per-task spend to task outcomes from `pi.usage` (§5.17 reader), warn-only against a soft threshold; no abort | 🤖 | — | Every run reports tokens without anyone reading a store by hand |
@@ -51,7 +51,7 @@ Owner: 🤖 = buildable now, no input needed · 🧑 = needs you (credential, cl
 | Independent review before push | ✅ reviewer runs pre-push; fail = no push |
 | Verification evidence on PRs | ⏳ Phase 1 item 4 — and it is the CI substitute (R1) |
 | Credential scoping | ⏳ Phase 1 items 2–3 (currently account-wide via keychain) |
-| External test re-run after draft | ❌ by decision (C2, no Actions) — accepted risk R1 |
+| External test re-run after draft | ✅ CI on every push/PR (C2-rev); advisory until `unit-suite` is made a required check (R1 residual) |
 | Required approving reviews | 0, by decision (E3), revisit with #68 |
 | Host | Laptop (A2) — sleep/IP/credential consequences accepted |
 | Secrets | `.env`, gitignored (A4) |
